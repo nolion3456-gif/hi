@@ -21,13 +21,13 @@ if (!token || !clientId) {
 const commands = [
   new SlashCommandBuilder()
     .setName('ping')
-    .setDescription('Check whether the bot is online.'),
+    .setDescription('检查机器人是否在线。'),
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Show the available commands.'),
+    .setDescription('查看可用指令。'),
   new SlashCommandBuilder()
     .setName('about')
-    .setDescription('Show information about this bot.'),
+    .setDescription('查看机器人信息。'),
 ].map((command) => command.toJSON());
 
 async function registerCommands() {
@@ -50,20 +50,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'ping') {
-    await interaction.reply(`Pong! Latency: ${client.ws.ping}ms`);
+    await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     return;
   }
 
   if (interaction.commandName === 'help') {
     await interaction.reply({
-      content: '**Available commands**\n`/ping` — check bot latency\n`/help` — show this help\n`/about` — show bot information',
+      content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息',
       ephemeral: true,
     });
     return;
   }
 
   if (interaction.commandName === 'about') {
-    await interaction.reply('A starter Discord bot built with discord.js.');
+    await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
   }
 });
 
