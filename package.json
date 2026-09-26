@@ -1,0 +1,16 @@
+{
+  "name": "discord-starter-bot",
+  "version": "1.0.0",
+  "description": "A safe starter Discord bot with slash commands.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
