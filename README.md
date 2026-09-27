@@ -64,6 +64,8 @@ Bot 的身份组必须排在可领取身份组的上方，并且 Bot 必须拥�
 
 填写的原因会同时传给 Discord 的审核日志（Audit Log），可在服务器设置 → 审核日志中查看。Discord 审核日志原因限制为 512 个字符，超过部分会自动截断；Bot 自己的日志频道仍会保留同一原因。
 
+惩罚日志 Embed 现在会显示被处罚成员头像、实行人员头像、实行频道和实行时间；只有 `mute` 会显示“禁言时长”，`unmute`、`kick`、`ban`、`unban` 不会显示该字段。执行处罚后，Bot 也会私讯被处罚者一张相同排版的处罚通知卡片；如果对方关闭了陌生人私讯，日志仍会正常记录。
+
 Bot 需要 `Moderate Members`、`Kick Members`、`Ban Members`、`View Channels`、`Send Messages` 和 `Embed Links` 权限。Bot 的身份组必须高于要被管理的成员。
 
 ## 权限限制

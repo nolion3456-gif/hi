@@ -327,25 +327,44 @@ async function sendLeave(member) {
 client.on(Events.GuildMemberAdd, sendWelcome);
 client.on(Events.GuildMemberRemove, sendLeave);
 
-async function logModeration(guild, config, action, target, duration, reason, executor) {
-  if (!config.moderationLogChannelId) return;
-  const channel = await guild.channels.fetch(config.moderationLogChannelId).catch(() => null);
-  if (!channel?.isTextBased()) return;
+function moderationEmbed(guild, action, target, duration, reason, executor, actionChannel, directMessage = false) {
   const targetId = target.id || target.user?.id;
   const targetName = target.user?.tag || target.tag || target.username || targetId;
+  const targetUser = target.user || target;
+  const executorAvatar = executor.displayAvatarURL?.({ extension: 'png', size: 128 });
+  const targetAvatar = targetUser.displayAvatarURL?.({ extension: 'png', size: 256 });
   const embed = new EmbedBuilder()
     .setColor(action === 'unmute' || action === 'unban' ? 0x57f287 : 0xed4245)
-    .setTitle('管理员惩罚记录')
+    .setTitle(directMessage ? `你在「${guild.name}」的处罚通知` : '管理员惩罚记录')
+    .setAuthor({ name: `${executor.tag} 执行了此操作`, iconURL: executorAvatar })
     .addFields(
-      { name: '实行', value: action, inline: true },
-      { name: '实行对象', value: `<@${targetId}>\n${targetName}\nID：${targetId}`, inline: true },
-      { name: '禁言时长', value: action === 'mute' ? duration : '不适用', inline: true },
+      { name: '实行', value: `\`/${action}\``, inline: true },
+      { name: '实行对象', value: `<@${targetId}>\n**${targetName}**\nID：${targetId}`, inline: true },
       { name: '实行原因', value: reason || '未填写', inline: false },
       { name: '实行人员', value: `<@${executor.id}>\n${executor.tag}`, inline: true },
+      { name: '实行频道', value: actionChannel ? `<#${actionChannel.id}>` : '私讯 / 无频道', inline: true },
       { name: '实行时间', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
     )
     .setTimestamp();
-  await channel.send({ embeds: [embed] }).catch((error) => console.error('Could not write moderation log:', error));
+  if (action === 'mute') embed.spliceFields(2, 0, { name: '禁言时长', value: duration, inline: true });
+  if (targetAvatar) embed.setThumbnail(targetAvatar);
+  if (!directMessage) embed.setFooter({ text: `${guild.name} · Discord 管理员惩罚记录`, iconURL: guild.iconURL?.({ extension: 'png', size: 64 }) || undefined });
+  return embed;
+}
+
+async function logModeration(guild, config, action, target, duration, reason, executor, actionChannel) {
+  if (!config.moderationLogChannelId) return;
+  const logChannel = await guild.channels.fetch(config.moderationLogChannelId).catch(() => null);
+  if (!logChannel?.isTextBased()) return;
+  const embed = moderationEmbed(guild, action, target, duration, reason, executor, actionChannel);
+  await logChannel.send({ embeds: [embed] }).catch((error) => console.error('Could not write moderation log:', error));
+}
+
+async function notifyModeratedUser(guild, action, target, duration, reason, executor, actionChannel) {
+  const user = target.user || target;
+  if (!user?.send) return;
+  const embed = moderationEmbed(guild, action, target, duration, reason, executor, actionChannel, true);
+  await user.send({ embeds: [embed] }).catch(() => console.warn(`Could not DM ${user.tag || user.id}.`));
 }
 
 async function performModeration(interaction, action) {
@@ -371,7 +390,8 @@ async function performModeration(interaction, action) {
     }
     try {
       await interaction.guild.members.unban(userId, reason);
-      await logModeration(interaction.guild, config, 'unban', target, '', reason, interaction.user);
+      await logModeration(interaction.guild, config, 'unban', target, '', reason, interaction.user, interaction.channel);
+      await notifyModeratedUser(interaction.guild, 'unban', target, '', reason, interaction.user, interaction.channel);
       await interaction.reply({ content: `已解除 **${target.tag}** 的封禁。`, ephemeral: true });
     } catch (error) {
       console.error('Unban failed:', error);
@@ -419,7 +439,8 @@ async function performModeration(interaction, action) {
     } else if (action === 'ban') {
       await member.ban({ reason, deleteMessageSeconds: 0 });
     }
-    await logModeration(interaction.guild, config, action, member, durationText, reason, interaction.user);
+    await logModeration(interaction.guild, config, action, member, durationText, reason, interaction.user, interaction.channel);
+    await notifyModeratedUser(interaction.guild, action, member, durationText, reason, interaction.user, interaction.channel);
     await interaction.reply({ content: `已对 **${user.tag}** 执行 \/${action}${action === 'mute' ? `（${durationText}）` : ''}。`, ephemeral: true });
   } catch (error) {
     console.error(`${action} failed:`, error);
