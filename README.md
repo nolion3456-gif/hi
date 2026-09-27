@@ -81,7 +81,16 @@ npm install
 npm start
 ```
 
-设置 `GUILD_ID` 或 `ALLOWED_GUILD_IDS` 后，Bot 会把斜杠指令注册到指定服务器，通常会立即显示。两个变量都为空时会注册为全局指令，Discord 可能需要最多约一小时才显示。
+设置 `GUILD_ID` 或 `ALLOWED_GUILD_IDS` 后，Bot 会把斜杠指令注册到指定服务器，通常会立即显示。两个变量中的服务器 ID 会合并注册；两个变量都为空时会注册为全局指令，Discord 可能需要最多约一小时才显示。
+
+如果 Bot 在两个服务器使用，建议这样填写：
+
+```env
+GUILD_ID=
+ALLOWED_GUILD_IDS=第一个服务器ID,第二个服务器ID
+```
+
+`ALLOWED_GUILD_IDS` 不要只填写其中一个服务器，否则另一个服务器会被视为未允许服务器，Bot 可能自动离开或不处理指令。
 
 邀请 Bot 时必须同时勾选 `bot` 与 `applications.commands` 两个 Scopes；只勾选 `bot` 不会显示斜杠指令。
 

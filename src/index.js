@@ -146,9 +146,10 @@ const commands = [
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
-  const guildIds = commandGuildId
-    ? [commandGuildId]
-    : [...allowedGuildIds];
+  const guildIds = [...new Set([
+    ...(commandGuildId ? [commandGuildId] : []),
+    ...allowedGuildIds,
+  ])];
 
   if (guildIds.length > 0) {
     await Promise.all(
