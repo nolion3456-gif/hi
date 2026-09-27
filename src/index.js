@@ -350,7 +350,7 @@ async function logModeration(guild, config, action, target, duration, reason, ex
 
 async function performModeration(interaction, action) {
   const config = getGuildSettings(interaction.guild.id);
-  const reason = interaction.options.getString('reason') || '未填写';
+  const reason = (interaction.options.getString('reason') || '未填写').slice(0, 512);
   const user = interaction.options.getUser('member');
 
   if (action === 'unban') {

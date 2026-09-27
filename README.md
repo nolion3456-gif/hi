@@ -62,6 +62,8 @@ Bot 的身份组必须排在可领取身份组的上方，并且 Bot 必须拥�
 - 实行人员
 - 实行时间
 
+填写的原因会同时传给 Discord 的审核日志（Audit Log），可在服务器设置 → 审核日志中查看。Discord 审核日志原因限制为 512 个字符，超过部分会自动截断；Bot 自己的日志频道仍会保留同一原因。
+
 Bot 需要 `Moderate Members`、`Kick Members`、`Ban Members`、`View Channels`、`Send Messages` 和 `Embed Links` 权限。Bot 的身份组必须高于要被管理的成员。
 
 ## 权限限制
