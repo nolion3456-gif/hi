@@ -391,9 +391,11 @@ async function performModeration(interaction, action) {
     }
     try {
       await interaction.guild.members.unban(userId, reason);
-      await logModeration(interaction.guild, config, 'unban', target, '', reason, interaction.user, interaction.channel);
-      await notifyModeratedUser(interaction.guild, 'unban', target, '', reason, interaction.user, interaction.channel);
       await interaction.editReply({ content: `已解除 **${target.tag}** 的封禁。` });
+      Promise.all([
+        logModeration(interaction.guild, config, 'unban', target, '', reason, interaction.user, interaction.channel),
+        notifyModeratedUser(interaction.guild, 'unban', target, '', reason, interaction.user, interaction.channel),
+      ]).catch((error) => console.error('Could not finish unban notifications:', error));
     } catch (error) {
       console.error('Unban failed:', error);
       await interaction.editReply({ content: '解除封禁失败，请检查 Bot 是否拥有封禁成员权限。' });
@@ -440,9 +442,11 @@ async function performModeration(interaction, action) {
     } else if (action === 'ban') {
       await member.ban({ reason, deleteMessageSeconds: 0 });
     }
-    await logModeration(interaction.guild, config, action, member, durationText, reason, interaction.user, interaction.channel);
-    await notifyModeratedUser(interaction.guild, action, member, durationText, reason, interaction.user, interaction.channel);
     await interaction.editReply({ content: `已对 **${user.tag}** 执行 \/${action}${action === 'mute' ? `（${durationText}）` : ''}。` });
+    Promise.all([
+      logModeration(interaction.guild, config, action, member, durationText, reason, interaction.user, interaction.channel),
+      notifyModeratedUser(interaction.guild, action, member, durationText, reason, interaction.user, interaction.channel),
+    ]).catch((error) => console.error('Could not finish moderation notifications:', error));
   } catch (error) {
     console.error(`${action} failed:`, error);
     await interaction.editReply({ content: `执行 /${action} 失败，请检查 Bot 权限、身份组层级和目标成员状态。` }).catch(() => {});

@@ -68,7 +68,7 @@ Bot 的身份组必须排在可领取身份组的上方，并且 Bot 必须拥�
 
 Bot 需要 `Moderate Members`、`Kick Members`、`Ban Members`、`View Channels`、`Send Messages` 和 `Embed Links` 权限。Bot 的身份组必须高于要被管理的成员。
 
-惩罚指令会先立即回应 Discord，再执行实际操作，因此不会因为禁言、日志或私讯处理超过 3 秒而显示“机器人未响应”。`/mute`、`/unmute`、`/kick`、`/ban`、`/unban` 的成功和错误反馈都会公开显示在执行指令的频道；`/moderation` 设置面板仍然是私密的。
+惩罚指令会先回应 Discord，执行成功后立即公开显示结果；惩罚日志和私讯通知会在后台完成，因此不会因为日志频道或私讯处理延迟而显示“机器人未响应”。`/mute`、`/unmute`、`/kick`、`/ban`、`/unban` 的成功和错误反馈都会公开显示在执行指令的频道；`/moderation` 设置面板仍然是私密的。
 
 ## 权限限制
 
