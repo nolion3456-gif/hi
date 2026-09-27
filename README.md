@@ -9,6 +9,12 @@
 - `/about` — 查看机器人信息
 - `/welcome` — 打开私密的欢迎/离开设置面板
 - `/roles` — 打开私密的身份组面板设置
+- `/moderation` — 设置惩罚日志频道
+- `/mute` — 暂时禁言成员
+- `/unmute` — 解除成员禁言
+- `/kick` — 踢出成员
+- `/ban` — 封禁成员
+- `/unban` — 解除用户封禁
 
 ## 欢迎 / 离开系统
 
@@ -32,6 +38,31 @@
 执行 `/roles` 后会收到只有自己看得到的配置面板，可以用按钮设置面板标题、面板文字、添加身份组和发布。发布后，成员可以在公开面板下方点击按钮领取或取消对应身份组。每个身份组都可以自定义按钮文字。
 
 Bot 的身份组必须排在可领取身份组的上方，并且 Bot 必须拥有 **Manage Roles / 管理身份组** 权限；托管身份组（例如机器人身份组或整合身份组）不能被领取。
+
+## 管理员惩罚系统
+
+管理员可以使用以下指令：
+
+```text
+/mute member duration reason
+/unmute member reason
+/kick member reason
+/ban member reason
+/unban user_id reason
+```
+
+其中 `reason` 可以留空。`/mute` 的 `duration` 支持 `30s`、`10m`、`2h`、`7d` 等格式，最长 28 天。
+
+执行 `/moderation` 会收到一个只有执行者看得到的设置面板，可以选择惩罚日志频道。日志频道**不一定要是私密频道**，可以选择普通公开文字频道，让其他成员查看处罚记录；当然也可以选择仅管理员可见的频道。每次操作会记录：
+
+- 实行：`mute`、`unmute`、`kick`、`ban`、`unban`
+- 实行对象：成员名称、提及和 ID
+- 禁言时长：只有 `mute` 显示时长
+- 实行原因
+- 实行人员
+- 实行时间
+
+Bot 需要 `Moderate Members`、`Kick Members`、`Ban Members`、`View Channels`、`Send Messages` 和 `Embed Links` 权限。Bot 的身份组必须高于要被管理的成员。
 
 ## 权限限制
 

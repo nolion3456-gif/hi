@@ -72,6 +72,7 @@ function getGuildSettings(guildId) {
         description: '点击下方按钮领取或取消对应身份组。',
         roles: [],
       },
+      moderationLogChannelId: '',
     };
   }
   if (!settings[guildId].rolePanel) {
@@ -80,6 +81,9 @@ function getGuildSettings(guildId) {
       description: '点击下方按钮领取或取消对应身份组。',
       roles: [],
     };
+  }
+  if (!Object.prototype.hasOwnProperty.call(settings[guildId], 'moderationLogChannelId')) {
+    settings[guildId].moderationLogChannelId = '';
   }
   return settings[guildId];
 }
@@ -182,6 +186,38 @@ function roleConfigComponents(roleConfig) {
   ];
 }
 
+function moderationPanelEmbed(guild, config) {
+  return new EmbedBuilder()
+    .setColor(0xed4245)
+    .setTitle('管理员惩罚系统设置')
+    .setDescription(`惩罚日志频道：${config.moderationLogChannelId ? `<#${config.moderationLogChannelId}>` : '未设置'}\n\n每次 mute、unmute、kick、ban、unban 操作都会记录到这个频道。`)
+    .setFooter({ text: `${guild.name} · 只有拥有管理服务器权限者可以操作` });
+}
+
+function moderationPanelComponents() {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('moderation_log_channel').setLabel('设置惩罚日志频道').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('moderation_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
+  )];
+}
+
+function parseDuration(value) {
+  const match = String(value).trim().match(/^(\d+)\s*(s|m|h|d|w)$/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const units = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+  const milliseconds = amount * units[match[2].toLowerCase()];
+  return milliseconds > 0 && milliseconds <= 28 * 86_400_000 ? milliseconds : null;
+}
+
+function formatDuration(milliseconds) {
+  const units = [[86_400_000, '天'], [3_600_000, '小时'], [60_000, '分钟'], [1000, '秒']];
+  for (const [unit, label] of units) {
+    if (milliseconds >= unit && milliseconds % unit === 0) return `${milliseconds / unit}${label}`;
+  }
+  return `${Math.ceil(milliseconds / 1000)}秒`;
+}
+
 function textModal(customId, title, label, value, paragraph = false) {
   const input = new TextInputBuilder()
     .setCustomId('value')
@@ -202,6 +238,28 @@ const commands = [
   new SlashCommandBuilder().setName('about').setDescription('查看机器人信息。'),
   new SlashCommandBuilder().setName('welcome').setDescription('打开欢迎和离开设置面板。'),
   new SlashCommandBuilder().setName('roles').setDescription('打开身份组面板设置。'),
+  new SlashCommandBuilder().setName('moderation').setDescription('打开管理员惩罚系统设置。'),
+  new SlashCommandBuilder()
+    .setName('mute').setDescription('暂时禁言一名成员。')
+    .addUserOption((option) => option.setName('member').setDescription('要禁言的成员。').setRequired(true))
+    .addStringOption((option) => option.setName('duration').setDescription('时长，例如 10m、2h、7d，最长28天。').setRequired(true))
+    .addStringOption((option) => option.setName('reason').setDescription('惩罚原因，可不填。').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('unmute').setDescription('解除一名成员的禁言。')
+    .addUserOption((option) => option.setName('member').setDescription('要解除禁言的成员。').setRequired(true))
+    .addStringOption((option) => option.setName('reason').setDescription('解除原因，可不填。').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('kick').setDescription('将一名成员踢出服务器。')
+    .addUserOption((option) => option.setName('member').setDescription('要踢出的成员。').setRequired(true))
+    .addStringOption((option) => option.setName('reason').setDescription('惩罚原因，可不填。').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('ban').setDescription('封禁一名成员。')
+    .addUserOption((option) => option.setName('member').setDescription('要封禁的成员。').setRequired(true))
+    .addStringOption((option) => option.setName('reason').setDescription('惩罚原因，可不填。').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('unban').setDescription('解除一名用户的封禁。')
+    .addStringOption((option) => option.setName('user_id').setDescription('被封禁用户的 Discord ID。').setRequired(true))
+    .addStringOption((option) => option.setName('reason').setDescription('解除原因，可不填。').setRequired(false)),
 ].map((command) => command.toJSON());
 
 async function registerCommands() {
@@ -269,6 +327,106 @@ async function sendLeave(member) {
 client.on(Events.GuildMemberAdd, sendWelcome);
 client.on(Events.GuildMemberRemove, sendLeave);
 
+async function logModeration(guild, config, action, target, duration, reason, executor) {
+  if (!config.moderationLogChannelId) return;
+  const channel = await guild.channels.fetch(config.moderationLogChannelId).catch(() => null);
+  if (!channel?.isTextBased()) return;
+  const targetId = target.id || target.user?.id;
+  const targetName = target.user?.tag || target.tag || target.username || targetId;
+  const embed = new EmbedBuilder()
+    .setColor(action === 'unmute' || action === 'unban' ? 0x57f287 : 0xed4245)
+    .setTitle('管理员惩罚记录')
+    .addFields(
+      { name: '实行', value: action, inline: true },
+      { name: '实行对象', value: `<@${targetId}>\n${targetName}\nID：${targetId}`, inline: true },
+      { name: '禁言时长', value: action === 'mute' ? duration : '不适用', inline: true },
+      { name: '实行原因', value: reason || '未填写', inline: false },
+      { name: '实行人员', value: `<@${executor.id}>\n${executor.tag}`, inline: true },
+      { name: '实行时间', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+    )
+    .setTimestamp();
+  await channel.send({ embeds: [embed] }).catch((error) => console.error('Could not write moderation log:', error));
+}
+
+async function performModeration(interaction, action) {
+  const config = getGuildSettings(interaction.guild.id);
+  const reason = interaction.options.getString('reason') || '未填写';
+  const user = interaction.options.getUser('member');
+
+  if (action === 'unban') {
+    const userId = interaction.options.getString('user_id').trim();
+    if (!/^\d{15,25}$/.test(userId)) {
+      await interaction.reply({ content: '请输入有效的 Discord 用户 ID。', ephemeral: true });
+      return;
+    }
+    const target = await client.users.fetch(userId).catch(() => null);
+    if (!target) {
+      await interaction.reply({ content: '找不到这个用户。', ephemeral: true });
+      return;
+    }
+    const ban = await interaction.guild.bans.fetch(userId).catch(() => null);
+    if (!ban) {
+      await interaction.reply({ content: '这个用户目前没有被本服务器封禁。', ephemeral: true });
+      return;
+    }
+    try {
+      await interaction.guild.members.unban(userId, reason);
+      await logModeration(interaction.guild, config, 'unban', target, '', reason, interaction.user);
+      await interaction.reply({ content: `已解除 **${target.tag}** 的封禁。`, ephemeral: true });
+    } catch (error) {
+      console.error('Unban failed:', error);
+      await interaction.reply({ content: '解除封禁失败，请检查 Bot 是否拥有封禁成员权限。', ephemeral: true });
+    }
+    return;
+  }
+
+  const member = user && await interaction.guild.members.fetch(user.id).catch(() => null);
+  if (!member) {
+    await interaction.reply({ content: '找不到这个服务器成员。', ephemeral: true });
+    return;
+  }
+  if (member.id === interaction.user.id) {
+    await interaction.reply({ content: '不能对自己执行这个操作。', ephemeral: true });
+    return;
+  }
+  if (!member.moderatable && action !== 'ban' && action !== 'kick') {
+    await interaction.reply({ content: 'Bot 无法管理这个成员，请检查身份组层级和权限。', ephemeral: true });
+    return;
+  }
+  if ((action === 'kick' || action === 'ban') && !member.kickable && action === 'kick') {
+    await interaction.reply({ content: 'Bot 无法踢出这个成员，请检查身份组层级和权限。', ephemeral: true });
+    return;
+  }
+  if (action === 'ban' && !member.bannable) {
+    await interaction.reply({ content: 'Bot 无法封禁这个成员，请检查身份组层级和权限。', ephemeral: true });
+    return;
+  }
+
+  try {
+    let durationText = '';
+    if (action === 'mute') {
+      const duration = parseDuration(interaction.options.getString('duration'));
+      if (!duration) {
+        await interaction.reply({ content: '时长格式无效，请使用例如 `10m`、`2h`、`7d`，最长 28 天。', ephemeral: true });
+        return;
+      }
+      durationText = formatDuration(duration);
+      await member.timeout(duration, reason);
+    } else if (action === 'unmute') {
+      await member.timeout(null, reason);
+    } else if (action === 'kick') {
+      await member.kick(reason);
+    } else if (action === 'ban') {
+      await member.ban({ reason, deleteMessageSeconds: 0 });
+    }
+    await logModeration(interaction.guild, config, action, member, durationText, reason, interaction.user);
+    await interaction.reply({ content: `已对 **${user.tag}** 执行 \/${action}${action === 'mute' ? `（${durationText}）` : ''}。`, ephemeral: true });
+  } catch (error) {
+    console.error(`${action} failed:`, error);
+    await interaction.reply({ content: `执行 /${action} 失败，请检查 Bot 权限、身份组层级和目标成员状态。`, ephemeral: true }).catch(() => {});
+  }
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.guild || !(await isGuildUsable(interaction.guild))) {
     await interaction.reply({ content: '这个服务器没有启用此机器人。', ephemeral: true }).catch(() => {});
@@ -279,7 +437,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'welcome') {
@@ -296,6 +454,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const config = getGuildSettings(interaction.guild.id).rolePanel;
       await interaction.reply({ embeds: [rolePanelEmbed(interaction.guild, config)], components: roleConfigComponents(config), ephemeral: true });
+    } else if (interaction.commandName === 'moderation') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。', ephemeral: true });
+        return;
+      }
+      const config = getGuildSettings(interaction.guild.id);
+      await interaction.reply({ embeds: [moderationPanelEmbed(interaction.guild, config)], components: moderationPanelComponents(), ephemeral: true });
+    } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(interaction.commandName)) {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。', ephemeral: true });
+        return;
+      }
+      await performModeration(interaction, interaction.commandName);
     }
     return;
   }
@@ -335,7 +506,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const config = getGuildSettings(interaction.guild.id);
 
   if (interaction.isButton()) {
-    if (interaction.customId === 'role_title') {
+    if (interaction.customId === 'moderation_log_channel') {
+      const menu = new ChannelSelectMenuBuilder()
+        .setCustomId('moderation_log_channel_select')
+        .setPlaceholder('选择惩罚日志频道')
+        .setChannelTypes(ChannelType.GuildText)
+        .setMinValues(1)
+        .setMaxValues(1);
+      await interaction.reply({ content: '请选择查看 mute、unmute、kick、ban、unban 记录的频道：', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+    } else if (interaction.customId === 'moderation_refresh') {
+      await interaction.update({ embeds: [moderationPanelEmbed(interaction.guild, config)], components: moderationPanelComponents() });
+    } else if (interaction.customId === 'role_title') {
       await interaction.showModal(textModal('role_title_modal', '设置身份组面板标题', '面板标题', config.rolePanel.title));
     } else if (interaction.customId === 'role_description') {
       await interaction.showModal(textModal('role_description_modal', '设置身份组面板文字', '面板文字', config.rolePanel.description, true));
@@ -381,6 +562,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isChannelSelectMenu()) {
+    if (interaction.customId === 'moderation_log_channel_select') {
+      config.moderationLogChannelId = interaction.values[0];
+      saveSettings();
+      await interaction.update({ content: `惩罚日志频道已设置为 <#${interaction.values[0]}>。请回到原来的私密面板并点击“刷新”。`, components: [] });
+      return;
+    }
     if (interaction.customId === 'welcome_channel_select') config.welcomeChannelId = interaction.values[0];
     if (interaction.customId === 'leave_channel_select') config.leaveChannelId = interaction.values[0];
     saveSettings();
