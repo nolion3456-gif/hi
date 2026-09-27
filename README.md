@@ -81,4 +81,8 @@ npm install
 npm start
 ```
 
+设置 `GUILD_ID` 或 `ALLOWED_GUILD_IDS` 后，Bot 会把斜杠指令注册到指定服务器，通常会立即显示。两个变量都为空时会注册为全局指令，Discord 可能需要最多约一小时才显示。
+
+邀请 Bot 时必须同时勾选 `bot` 与 `applications.commands` 两个 Scopes；只勾选 `bot` 不会显示斜杠指令。
+
 不要把 `.env` 或 Discord Token 提交到 GitHub。若 Token 泄露，请立刻在 Developer Portal 重新生成。

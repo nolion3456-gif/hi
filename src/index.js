@@ -146,11 +146,22 @@ const commands = [
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
-  const route = commandGuildId
-    ? Routes.applicationGuildCommands(clientId, commandGuildId)
-    : Routes.applicationCommands(clientId);
-  await rest.put(route, { body: commands });
-  console.log(commandGuildId ? `Registered commands in guild ${commandGuildId}.` : 'Registered global commands.');
+  const guildIds = commandGuildId
+    ? [commandGuildId]
+    : [...allowedGuildIds];
+
+  if (guildIds.length > 0) {
+    await Promise.all(
+      guildIds.map((guildId) =>
+        rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands }),
+      ),
+    );
+    console.log(`Registered commands instantly in guilds: ${guildIds.join(', ')}`);
+    return;
+  }
+
+  await rest.put(Routes.applicationCommands(clientId), { body: commands });
+  console.log('Registered global commands. They may take up to an hour to appear.');
 }
 
 const client = new Client({
