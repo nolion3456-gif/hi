@@ -138,10 +138,10 @@ function textModal(customId, title, label, value, paragraph = false) {
 }
 
 const commands = [
-  new SlashCommandBuilder().setName('ping').setDescription('Check whether the bot is online.'),
-  new SlashCommandBuilder().setName('help').setDescription('Show available commands.'),
-  new SlashCommandBuilder().setName('about').setDescription('Show information about this bot.'),
-  new SlashCommandBuilder().setName('welcome').setDescription('Open the welcome and leave settings panel.'),
+  new SlashCommandBuilder().setName('ping').setDescription('检查机器人是否在线。'),
+  new SlashCommandBuilder().setName('help').setDescription('查看可用指令。'),
+  new SlashCommandBuilder().setName('about').setDescription('查看机器人信息。'),
+  new SlashCommandBuilder().setName('welcome').setDescription('打开欢迎和离开设置面板。'),
 ].map((command) => command.toJSON());
 
 async function registerCommands() {
