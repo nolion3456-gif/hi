@@ -21,13 +21,13 @@ if (!token || !clientId) {
 const commands = [
   new SlashCommandBuilder()
     .setName('ping')
-    .setDescription('检查机器人是否在线。'),
+    .setDescription('Check whether the bot is online.'),
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('查看可用指令。'),
+    .setDescription('Show available commands.'),
   new SlashCommandBuilder()
     .setName('about')
-    .setDescription('查看机器人信息。'),
+    .setDescription('Show information about this bot.'),
 ].map((command) => command.toJSON());
 
 async function registerCommands() {
