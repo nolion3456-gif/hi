@@ -368,6 +368,7 @@ async function notifyModeratedUser(guild, action, target, duration, reason, exec
 }
 
 async function performModeration(interaction, action) {
+  await interaction.deferReply();
   const config = getGuildSettings(interaction.guild.id);
   const reason = (interaction.options.getString('reason') || '未填写').slice(0, 512);
   const user = interaction.options.getUser('member');
@@ -375,50 +376,50 @@ async function performModeration(interaction, action) {
   if (action === 'unban') {
     const userId = interaction.options.getString('user_id').trim();
     if (!/^\d{15,25}$/.test(userId)) {
-      await interaction.reply({ content: '请输入有效的 Discord 用户 ID。', ephemeral: true });
+      await interaction.editReply({ content: '请输入有效的 Discord 用户 ID。' });
       return;
     }
     const target = await client.users.fetch(userId).catch(() => null);
     if (!target) {
-      await interaction.reply({ content: '找不到这个用户。', ephemeral: true });
+      await interaction.editReply({ content: '找不到这个用户。' });
       return;
     }
     const ban = await interaction.guild.bans.fetch(userId).catch(() => null);
     if (!ban) {
-      await interaction.reply({ content: '这个用户目前没有被本服务器封禁。', ephemeral: true });
+      await interaction.editReply({ content: '这个用户目前没有被本服务器封禁。' });
       return;
     }
     try {
       await interaction.guild.members.unban(userId, reason);
       await logModeration(interaction.guild, config, 'unban', target, '', reason, interaction.user, interaction.channel);
       await notifyModeratedUser(interaction.guild, 'unban', target, '', reason, interaction.user, interaction.channel);
-      await interaction.reply({ content: `已解除 **${target.tag}** 的封禁。`, ephemeral: true });
+      await interaction.editReply({ content: `已解除 **${target.tag}** 的封禁。` });
     } catch (error) {
       console.error('Unban failed:', error);
-      await interaction.reply({ content: '解除封禁失败，请检查 Bot 是否拥有封禁成员权限。', ephemeral: true });
+      await interaction.editReply({ content: '解除封禁失败，请检查 Bot 是否拥有封禁成员权限。' });
     }
     return;
   }
 
   const member = user && await interaction.guild.members.fetch(user.id).catch(() => null);
   if (!member) {
-    await interaction.reply({ content: '找不到这个服务器成员。', ephemeral: true });
+    await interaction.editReply({ content: '找不到这个服务器成员。' });
     return;
   }
   if (member.id === interaction.user.id) {
-    await interaction.reply({ content: '不能对自己执行这个操作。', ephemeral: true });
+    await interaction.editReply({ content: '不能对自己执行这个操作。' });
     return;
   }
   if (!member.moderatable && action !== 'ban' && action !== 'kick') {
-    await interaction.reply({ content: 'Bot 无法管理这个成员，请检查身份组层级和权限。', ephemeral: true });
+    await interaction.editReply({ content: 'Bot 无法管理这个成员，请检查身份组层级和权限。' });
     return;
   }
   if ((action === 'kick' || action === 'ban') && !member.kickable && action === 'kick') {
-    await interaction.reply({ content: 'Bot 无法踢出这个成员，请检查身份组层级和权限。', ephemeral: true });
+    await interaction.editReply({ content: 'Bot 无法踢出这个成员，请检查身份组层级和权限。' });
     return;
   }
   if (action === 'ban' && !member.bannable) {
-    await interaction.reply({ content: 'Bot 无法封禁这个成员，请检查身份组层级和权限。', ephemeral: true });
+    await interaction.editReply({ content: 'Bot 无法封禁这个成员，请检查身份组层级和权限。' });
     return;
   }
 
@@ -427,7 +428,7 @@ async function performModeration(interaction, action) {
     if (action === 'mute') {
       const duration = parseDuration(interaction.options.getString('duration'));
       if (!duration) {
-        await interaction.reply({ content: '时长格式无效，请使用例如 `10m`、`2h`、`7d`，最长 28 天。', ephemeral: true });
+        await interaction.editReply({ content: '时长格式无效，请使用例如 `10m`、`2h`、`7d`，最长 28 天。' });
         return;
       }
       durationText = formatDuration(duration);
@@ -441,10 +442,10 @@ async function performModeration(interaction, action) {
     }
     await logModeration(interaction.guild, config, action, member, durationText, reason, interaction.user, interaction.channel);
     await notifyModeratedUser(interaction.guild, action, member, durationText, reason, interaction.user, interaction.channel);
-    await interaction.reply({ content: `已对 **${user.tag}** 执行 \/${action}${action === 'mute' ? `（${durationText}）` : ''}。`, ephemeral: true });
+    await interaction.editReply({ content: `已对 **${user.tag}** 执行 \/${action}${action === 'mute' ? `（${durationText}）` : ''}。` });
   } catch (error) {
     console.error(`${action} failed:`, error);
-    await interaction.reply({ content: `执行 /${action} 失败，请检查 Bot 权限、身份组层级和目标成员状态。`, ephemeral: true }).catch(() => {});
+    await interaction.editReply({ content: `执行 /${action} 失败，请检查 Bot 权限、身份组层级和目标成员状态。` }).catch(() => {});
   }
 }
 
@@ -484,7 +485,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ embeds: [moderationPanelEmbed(interaction.guild, config)], components: moderationPanelComponents(), ephemeral: true });
     } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(interaction.commandName)) {
       if (!(await canManage(interaction))) {
-        await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。', ephemeral: true });
+        await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。' });
         return;
       }
       await performModeration(interaction, interaction.commandName);
