@@ -88,10 +88,16 @@ function isGuildAllowed(guildId) {
   return allowedGuildIds.size === 0 || allowedGuildIds.has(guildId);
 }
 
+async function isGuildUsable(guild) {
+  if (isGuildAllowed(guild.id)) return true;
+  if (!ownerId) return false;
+  return Boolean(await guild.members.fetch(ownerId).catch(() => null));
+}
+
 async function canManage(interaction) {
   if (!interaction.guild || !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return false;
-  if (allowedGuildIds.size > 0 && !allowedGuildIds.has(interaction.guild.id)) return false;
-  if (!ownerId || allowedGuildIds.has(interaction.guild.id)) return true;
+  if (allowedGuildIds.has(interaction.guild.id)) return true;
+  if (!ownerId) return allowedGuildIds.size === 0;
   return Boolean(await interaction.guild.members.fetch(ownerId).catch(() => null));
 }
 
@@ -229,14 +235,14 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 client.on(Events.GuildCreate, async (guild) => {
-  if (!isGuildAllowed(guild.id)) {
+  if (!(await isGuildUsable(guild))) {
     console.log(`Leaving unauthorized guild ${guild.id}.`);
     await guild.leave().catch((error) => console.error('Could not leave guild:', error));
   }
 });
 
 async function sendWelcome(member) {
-  if (!isGuildAllowed(member.guild.id) || member.user.bot) return;
+  if (!(await isGuildUsable(member.guild)) || member.user.bot) return;
   const config = getGuildSettings(member.guild.id);
   const content = replacePlaceholders(config.welcomeMessage, member);
   const embed = new EmbedBuilder().setColor(0x57f287).setDescription(content);
@@ -251,7 +257,7 @@ async function sendWelcome(member) {
 }
 
 async function sendLeave(member) {
-  if (!isGuildAllowed(member.guild.id) || member.user.bot) return;
+  if (!(await isGuildUsable(member.guild)) || member.user.bot) return;
   const config = getGuildSettings(member.guild.id);
   const channel = config.leaveChannelId && await member.guild.channels.fetch(config.leaveChannelId).catch(() => null);
   if (!channel?.isTextBased()) return;
@@ -264,7 +270,7 @@ client.on(Events.GuildMemberAdd, sendWelcome);
 client.on(Events.GuildMemberRemove, sendLeave);
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.guild || !isGuildAllowed(interaction.guild.id)) {
+  if (!interaction.guild || !(await isGuildUsable(interaction.guild))) {
     await interaction.reply({ content: '这个服务器没有启用此机器人。', ephemeral: true }).catch(() => {});
     return;
   }

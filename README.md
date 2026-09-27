@@ -45,7 +45,7 @@ ALLOWED_GUILD_IDS=允许使用的服务器ID,另一个服务器ID
 - 现在 `/welcome`、`/roles` 等管理面板要求使用者拥有 **管理服务器 / Manage Server** 权限。
 - 如果填写了 `OWNER_ID` 且服务器不在允许列表，服务器必须有你的账号，管理员才可以使用机器人。
 - 如果服务器 ID 写入 `ALLOWED_GUILD_IDS`，该服务器的管理员可以使用机器人，即使你不在该服务器。
-- 设置 `ALLOWED_GUILD_IDS` 后，机器人只会在列出的服务器运行；进入其他服务器会自动离开。
+- 设置 `ALLOWED_GUILD_IDS` 后，列出的服务器可以使用；未列出的服务器只有在服务器中有你的账号时才可以使用，否则机器人会自动离开。
 - `ALLOWED_GUILD_IDS` 留空时，填写 `OWNER_ID` 会限制为“服务器有你”；不填写 `OWNER_ID` 则所有服务器管理员都可使用，不建议这样部署。
 
 ## Discord Developer Portal 设置
