@@ -312,11 +312,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     try {
-      if (interaction.member.roles.cache.has(roleId)) {
-        await interaction.member.roles.remove(role);
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      if (member.roles.cache.has(roleId)) {
+        await member.roles.remove(role);
         await interaction.reply({ content: `已移除身份组：${role.name}`, ephemeral: true });
       } else {
-        await interaction.member.roles.add(role);
+        await member.roles.add(role);
         await interaction.reply({ content: `已领取身份组：${role.name}`, ephemeral: true });
       }
     } catch (error) {
@@ -390,7 +391,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isRoleSelectMenu()) {
     if (interaction.customId !== 'role_add_select') return;
     const roleId = interaction.values[0];
-    await interaction.showModal(textModal(`role_label_modal:${roleId}`, '设置身份组按钮文字', '按钮文字', '领取身份组', false));
+    const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+    if (!role || role.managed) {
+      await interaction.reply({ content: '这个身份组不存在或无法由机器人管理。', ephemeral: true });
+      return;
+    }
+    await interaction.showModal(textModal(`role_label_modal:${roleId}`, '设置身份组按钮文字', '按钮名称（留空使用身份组名称）', role.name, false));
     return;
   }
 
