@@ -51,10 +51,13 @@ function loadSettings() {
 }
 
 let settings = loadSettings();
+if (!settings.giveaways) settings.giveaways = {};
 
 function saveSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
+
+const giveawayTimers = new Map();
 
 function getGuildSettings(guildId) {
   if (!settings[guildId]) {
@@ -218,6 +221,100 @@ function formatDuration(milliseconds) {
   return `${Math.ceil(milliseconds / 1000)}秒`;
 }
 
+function giveawayEmbed(giveaway, ended = false) {
+  const tagText = giveaway.requiredTag ? `\n服务器 Tag：**${giveaway.requiredTag}**` : '';
+  const winnerText = giveaway.winnerIds?.length ? `\n\n获奖者：${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')}` : '';
+  return new EmbedBuilder()
+    .setColor(ended ? 0x747f8d : 0x5865f2)
+    .setTitle(ended ? `🎉 抽奖结束：${giveaway.prize}` : `🎉 ${giveaway.prize}`)
+    .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}${tagText}${winnerText}`)
+    .addFields(
+      { name: '获奖人数', value: String(giveaway.winnerCount), inline: true },
+      { name: '参与人数', value: String(giveaway.entries.length), inline: true },
+      { name: ended ? '结束时间' : '结束倒计时', value: ended ? `<t:${Math.floor(giveaway.endsAt / 1000)}:F>` : `<t:${Math.floor(giveaway.endsAt / 1000)}:R>`, inline: true },
+    )
+    .setFooter({ text: `主办人：${giveaway.hostName} · 抽奖 ID：${giveaway.id}` })
+    .setTimestamp(new Date(giveaway.createdAt));
+}
+
+function giveawayButtons(giveaway, disabled = false) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`giveaway_join:${giveaway.id}`).setLabel('参加抽奖').setStyle(ButtonStyle.Success).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(`giveaway_leave:${giveaway.id}`).setLabel('退出抽奖').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+  )];
+}
+
+function giveawayPanelEmbed(guild, giveaways) {
+  const active = giveaways.filter((item) => item.guildId === guild.id && item.status === 'active');
+  const ended = giveaways.filter((item) => item.guildId === guild.id && item.status === 'ended').slice(-5);
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('抽奖管理面板')
+    .setDescription(active.length || ended.length ? [...active, ...ended].map((item) => `**${item.prize}** · ID：\`${item.id}\` · ${item.entries.length} 人参加 · ${item.status === 'active' ? '进行中' : '已结束'}`).join('\n') : '目前没有进行中的抽奖。')
+    .setFooter({ text: `${guild.name} · 创建抽奖后会发布到当前频道` });
+}
+
+function giveawayPanelButtons(giveaways, guildId) {
+  const selected = giveaways.filter((item) => item.guildId === guildId && (item.status === 'active' || item.status === 'ended')).slice(-10);
+  const rows = [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('giveaway_create').setLabel('创建抽奖').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('giveaway_refresh').setLabel('刷新面板').setStyle(ButtonStyle.Secondary),
+  )];
+  for (const item of selected) {
+    rows.push(new ActionRowBuilder().addComponents(
+      item.status === 'active'
+        ? new ButtonBuilder().setCustomId(`giveaway_end:${item.id}`).setLabel(`结束：${item.prize}`.slice(0, 80)).setStyle(ButtonStyle.Danger)
+        : new ButtonBuilder().setCustomId(`giveaway_reroll:${item.id}`).setLabel(`重抽：${item.prize}`.slice(0, 80)).setStyle(ButtonStyle.Secondary),
+    ));
+  }
+  return rows.slice(0, 5);
+}
+
+function giveawayModal() {
+  const fields = [
+    ['prize', '奖品', TextInputStyle.Short, true, '例如：Discord Nitro'],
+    ['duration', '持续时间', TextInputStyle.Short, true, '例如：1h、30m、2d'],
+    ['winner_count', '获奖人数', TextInputStyle.Short, true, '例如：1'],
+    ['description', '抽奖说明', TextInputStyle.Paragraph, false, '可不填'],
+    ['required_tag', '服务器 Tag（可选）', TextInputStyle.Short, false, '例如：ABCD；留空代表不限制'],
+  ];
+  return new ModalBuilder().setCustomId('giveaway_create_modal').setTitle('创建抽奖').addComponents(
+    ...fields.map(([id, label, style, required, placeholder]) => new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required).setPlaceholder(placeholder).setMaxLength(id === 'description' ? 1000 : 100),
+    )),
+  );
+}
+
+function userHasRequiredTag(user, guildId, requiredTag) {
+  if (!requiredTag) return true;
+  const primary = user.primaryGuild;
+  return Boolean(primary?.identityGuildId === guildId && primary.tag?.toLowerCase() === requiredTag.toLowerCase());
+}
+
+async function finishGiveaway(giveawayId, reroll = false) {
+  const giveaway = settings.giveaways[giveawayId];
+  if (!giveaway) return null;
+  const guild = await client.guilds.fetch(giveaway.guildId).catch(() => null);
+  if (!guild) return null;
+  const channel = await guild.channels.fetch(giveaway.channelId).catch(() => null);
+  const message = channel?.isTextBased() ? await channel.messages.fetch(giveaway.messageId).catch(() => null) : null;
+  const pool = reroll ? giveaway.entries.filter((id) => !giveaway.winnerIds?.includes(id)) : giveaway.entries;
+  if (!pool.length) return null;
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  giveaway.winnerIds = shuffled.slice(0, giveaway.winnerCount);
+  giveaway.status = 'ended';
+  saveSettings();
+  if (giveawayTimers.has(giveawayId)) clearTimeout(giveawayTimers.get(giveawayId));
+  if (message) await message.edit({ embeds: [giveawayEmbed(giveaway, true)], components: giveawayButtons(giveaway, true) }).catch(console.error);
+  if (channel?.isTextBased()) await channel.send(`🎉 恭喜 ${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')} 获得 **${giveaway.prize}**！`).catch(console.error);
+  return giveaway;
+}
+
+function scheduleGiveaway(giveaway) {
+  const delay = Math.max(1000, giveaway.endsAt - Date.now());
+  giveawayTimers.set(giveaway.id, setTimeout(() => finishGiveaway(giveaway.id), Math.min(delay, 2_147_000_000)));
+}
+
 function textModal(customId, title, label, value, paragraph = false) {
   const input = new TextInputBuilder()
     .setCustomId('value')
@@ -239,6 +336,7 @@ const commands = [
   new SlashCommandBuilder().setName('welcome').setDescription('打开欢迎和离开设置面板。'),
   new SlashCommandBuilder().setName('roles').setDescription('打开身份组面板设置。'),
   new SlashCommandBuilder().setName('moderation').setDescription('打开管理员惩罚系统设置。'),
+  new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
   new SlashCommandBuilder()
     .setName('mute').setDescription('暂时禁言一名成员。')
     .addUserOption((option) => option.setName('member').setDescription('要禁言的成员。').setRequired(true))
@@ -290,6 +388,12 @@ const client = new Client({
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Ready! Logged in as ${readyClient.user.tag}`);
   if (allowedGuildIds.size) console.log(`Restricted to guilds: ${[...allowedGuildIds].join(', ')}`);
+  for (const giveaway of Object.values(settings.giveaways)) {
+    if (giveaway.status === 'active') {
+      if (Date.now() >= giveaway.endsAt) finishGiveaway(giveaway.id).catch(console.error);
+      else scheduleGiveaway(giveaway);
+    }
+  }
 });
 
 client.on(Events.GuildCreate, async (guild) => {
@@ -463,7 +567,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'welcome') {
@@ -487,6 +591,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [moderationPanelEmbed(interaction.guild, config)], components: moderationPanelComponents(), ephemeral: true });
+    } else if (interaction.commandName === 'giveaway') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以创建和管理抽奖。', ephemeral: true });
+        return;
+      }
+      const active = Object.values(settings.giveaways);
+      await interaction.reply({ embeds: [giveawayPanelEmbed(interaction.guild, active)], components: giveawayPanelButtons(active, interaction.guild.id), ephemeral: true });
     } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(interaction.commandName)) {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。' });
@@ -524,6 +635,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.isButton() && (interaction.customId.startsWith('giveaway_join:') || interaction.customId.startsWith('giveaway_leave:'))) {
+    const [action, giveawayId] = interaction.customId.split(':');
+    const giveaway = settings.giveaways[giveawayId];
+    if (!giveaway || giveaway.status !== 'active') {
+      await interaction.reply({ content: '这个抽奖已经结束或不存在。', ephemeral: true });
+      return;
+    }
+    if (Date.now() >= giveaway.endsAt) {
+      await finishGiveaway(giveaway.id);
+      await interaction.reply({ content: '这个抽奖刚刚结束了。', ephemeral: true });
+      return;
+    }
+    if (action === 'giveaway_join') {
+      const currentUser = await interaction.user.fetch(true).catch(() => interaction.user);
+      if (!userHasRequiredTag(currentUser, interaction.guild.id, giveaway.requiredTag)) {
+        await interaction.reply({ content: `你必须拥有服务器 Tag「${giveaway.requiredTag}」才能参加这个抽奖。`, ephemeral: true });
+        return;
+      }
+      if (giveaway.entries.includes(interaction.user.id)) {
+        await interaction.reply({ content: '你已经参加这个抽奖了。', ephemeral: true });
+        return;
+      }
+      giveaway.entries.push(interaction.user.id);
+      await interaction.reply({ content: '你已成功参加抽奖，祝你好运！', ephemeral: true });
+    } else {
+      giveaway.entries = giveaway.entries.filter((id) => id !== interaction.user.id);
+      await interaction.reply({ content: '你已退出这个抽奖。', ephemeral: true });
+    }
+    saveSettings();
+    const message = await interaction.channel.messages.fetch(giveaway.messageId).catch(() => null);
+    if (message) await message.edit({ embeds: [giveawayEmbed(giveaway)], components: giveawayButtons(giveaway) }).catch(console.error);
+    return;
+  }
+
   if (!(await canManage(interaction))) {
     await interaction.reply({ content: '只有授权用户可以操作这个设置面板。', ephemeral: true }).catch(() => {});
     return;
@@ -532,7 +677,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const config = getGuildSettings(interaction.guild.id);
 
   if (interaction.isButton()) {
-    if (interaction.customId === 'moderation_log_channel') {
+    if (interaction.customId === 'giveaway_create') {
+      await interaction.showModal(giveawayModal());
+    } else if (interaction.customId === 'giveaway_refresh') {
+      const active = Object.values(settings.giveaways);
+      await interaction.update({ embeds: [giveawayPanelEmbed(interaction.guild, active)], components: giveawayPanelButtons(active, interaction.guild.id) });
+    } else if (interaction.customId.startsWith('giveaway_end:')) {
+      const giveaway = settings.giveaways[interaction.customId.split(':')[1]];
+      if (!giveaway || giveaway.status !== 'active') await interaction.reply({ content: '这个抽奖已经结束或不存在。', ephemeral: true });
+      else { await interaction.deferUpdate(); await finishGiveaway(giveaway.id); }
+    } else if (interaction.customId.startsWith('giveaway_reroll:')) {
+      const giveaway = settings.giveaways[interaction.customId.split(':')[1]];
+      if (!giveaway || giveaway.status !== 'ended') await interaction.reply({ content: '只有已经结束的抽奖才能重抽。', ephemeral: true });
+      else { await interaction.deferUpdate(); await finishGiveaway(giveaway.id, true); }
+    } else if (interaction.customId === 'moderation_log_channel') {
       const menu = new ChannelSelectMenuBuilder()
         .setCustomId('moderation_log_channel_select')
         .setPlaceholder('选择惩罚日志频道')
@@ -614,6 +772,41 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isModalSubmit()) {
+    if (interaction.customId === 'giveaway_create_modal') {
+      const prize = interaction.fields.getTextInputValue('prize').trim();
+      const duration = parseDuration(interaction.fields.getTextInputValue('duration'));
+      const winnerCount = Number(interaction.fields.getTextInputValue('winner_count'));
+      const description = interaction.fields.getTextInputValue('description').trim();
+      const requiredTag = interaction.fields.getTextInputValue('required_tag').trim().slice(0, 4);
+      if (!duration || duration < 10_000 || !Number.isInteger(winnerCount) || winnerCount < 1 || winnerCount > 100) {
+        await interaction.reply({ content: '抽奖设置无效：时长至少 10 秒，获奖人数必须是 1 至 100 的整数。', ephemeral: true });
+        return;
+      }
+      const giveaway = {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        guildId: interaction.guild.id,
+        channelId: interaction.channel.id,
+        messageId: '',
+        prize,
+        description,
+        requiredTag,
+        winnerCount,
+        entries: [],
+        winnerIds: [],
+        hostId: interaction.user.id,
+        hostName: interaction.user.tag,
+        createdAt: Date.now(),
+        endsAt: Date.now() + duration,
+        status: 'active',
+      };
+      const message = await interaction.channel.send({ embeds: [giveawayEmbed(giveaway)], components: giveawayButtons(giveaway) });
+      giveaway.messageId = message.id;
+      settings.giveaways[giveaway.id] = giveaway;
+      saveSettings();
+      scheduleGiveaway(giveaway);
+      await interaction.reply({ content: `抽奖已发布到当前频道，抽奖 ID：\`${giveaway.id}\``, ephemeral: true });
+      return;
+    }
     const value = interaction.fields.getTextInputValue('value').trim();
     if (interaction.customId === 'welcome_message_modal') config.welcomeMessage = value || '欢迎 {user} 加入 **{server}**！';
     if (interaction.customId === 'leave_message_modal') config.leaveMessage = value || '{user} 已离开 **{server}**。';
