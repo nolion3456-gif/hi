@@ -58,6 +58,7 @@ function saveSettings() {
 }
 
 const giveawayTimers = new Map();
+const pendingGiveawayDrafts = new Map();
 
 function getGuildSettings(guildId) {
   if (!settings[guildId]) {
@@ -222,7 +223,7 @@ function formatDuration(milliseconds) {
 }
 
 function giveawayEmbed(giveaway, ended = false) {
-  const tagText = giveaway.requiredTag ? `\n服务器 Tag：**${giveaway.requiredTag}**` : '';
+  const tagText = giveaway.requireServerTag ? '\n要求装备当前服务器 Tag：**是**' : '';
   const winnerText = giveaway.winnerIds?.length ? `\n\n获奖者：${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')}` : '';
   return new EmbedBuilder()
     .setColor(ended ? 0x747f8d : 0x5865f2)
@@ -276,7 +277,6 @@ function giveawayModal() {
     ['duration', '持续时间', TextInputStyle.Short, true, '例如：1h、30m、2d'],
     ['winner_count', '获奖人数', TextInputStyle.Short, true, '例如：1'],
     ['description', '抽奖说明', TextInputStyle.Paragraph, false, '可不填'],
-    ['required_tag', '服务器 Tag（可选）', TextInputStyle.Short, false, '例如：ABCD；留空代表不限制'],
   ];
   return new ModalBuilder().setCustomId('giveaway_create_modal').setTitle('创建抽奖').addComponents(
     ...fields.map(([id, label, style, required, placeholder]) => new ActionRowBuilder().addComponents(
@@ -285,10 +285,10 @@ function giveawayModal() {
   );
 }
 
-function userHasRequiredTag(user, guildId, requiredTag) {
-  if (!requiredTag) return true;
+function userHasRequiredTag(user, guildId, requireServerTag) {
+  if (!requireServerTag) return true;
   const primary = user.primaryGuild;
-  return Boolean(primary?.identityGuildId === guildId && primary.tag?.toLowerCase() === requiredTag.toLowerCase());
+  return Boolean(primary?.identityGuildId === guildId);
 }
 
 async function finishGiveaway(giveawayId, reroll = false) {
@@ -649,8 +649,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (action === 'giveaway_join') {
       const currentUser = await interaction.user.fetch(true).catch(() => interaction.user);
-      if (!userHasRequiredTag(currentUser, interaction.guild.id, giveaway.requiredTag)) {
-        await interaction.reply({ content: `你必须拥有服务器 Tag「${giveaway.requiredTag}」才能参加这个抽奖。`, ephemeral: true });
+      if (!userHasRequiredTag(currentUser, interaction.guild.id, giveaway.requireServerTag)) {
+        await interaction.reply({ content: '你必须装备当前服务器的 Server Tag 才能参加这个抽奖。', ephemeral: true });
         return;
       }
       if (giveaway.entries.includes(interaction.user.id)) {
@@ -677,7 +677,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const config = getGuildSettings(interaction.guild.id);
 
   if (interaction.isButton()) {
-    if (interaction.customId === 'giveaway_create') {
+    if (interaction.customId.startsWith('giveaway_tag:')) {
+      const [, tagValue, draftId] = interaction.customId.split(':');
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft || draft.guildId !== interaction.guild.id || draft.hostId !== interaction.user.id) {
+        await interaction.reply({ content: '这个抽奖设置已过期，请重新执行 `/giveaway`。', ephemeral: true });
+        return;
+      }
+      const giveaway = {
+        id: draftId,
+        ...draft,
+        requireServerTag: tagValue === 'true',
+        messageId: '',
+        entries: [],
+        winnerIds: [],
+        createdAt: Date.now(),
+        endsAt: Date.now() + draft.duration,
+        status: 'active',
+      };
+      const message = await interaction.channel.send({ embeds: [giveawayEmbed(giveaway)], components: giveawayButtons(giveaway) });
+      giveaway.messageId = message.id;
+      settings.giveaways[giveaway.id] = giveaway;
+      pendingGiveawayDrafts.delete(draftId);
+      saveSettings();
+      scheduleGiveaway(giveaway);
+      await interaction.update({ content: `抽奖已发布到当前频道，抽奖 ID：\`${giveaway.id}\``, components: [] });
+    } else if (interaction.customId === 'giveaway_create') {
       await interaction.showModal(giveawayModal());
     } else if (interaction.customId === 'giveaway_refresh') {
       const active = Object.values(settings.giveaways);
@@ -777,34 +802,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const duration = parseDuration(interaction.fields.getTextInputValue('duration'));
       const winnerCount = Number(interaction.fields.getTextInputValue('winner_count'));
       const description = interaction.fields.getTextInputValue('description').trim();
-      const requiredTag = interaction.fields.getTextInputValue('required_tag').trim().slice(0, 4);
       if (!duration || duration < 10_000 || !Number.isInteger(winnerCount) || winnerCount < 1 || winnerCount > 100) {
         await interaction.reply({ content: '抽奖设置无效：时长至少 10 秒，获奖人数必须是 1 至 100 的整数。', ephemeral: true });
         return;
       }
-      const giveaway = {
-        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      const draftId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      pendingGiveawayDrafts.set(draftId, {
         guildId: interaction.guild.id,
         channelId: interaction.channel.id,
-        messageId: '',
         prize,
         description,
-        requiredTag,
         winnerCount,
-        entries: [],
-        winnerIds: [],
         hostId: interaction.user.id,
         hostName: interaction.user.tag,
-        createdAt: Date.now(),
-        endsAt: Date.now() + duration,
-        status: 'active',
-      };
-      const message = await interaction.channel.send({ embeds: [giveawayEmbed(giveaway)], components: giveawayButtons(giveaway) });
-      giveaway.messageId = message.id;
-      settings.giveaways[giveaway.id] = giveaway;
-      saveSettings();
-      scheduleGiveaway(giveaway);
-      await interaction.reply({ content: `抽奖已发布到当前频道，抽奖 ID：\`${giveaway.id}\``, ephemeral: true });
+        duration,
+      });
+      await interaction.reply({
+        content: '请选择这次抽奖是否要求成员装备当前服务器的 Server Tag：',
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`giveaway_tag:true:${draftId}`).setLabel('true：需要 Server Tag').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`giveaway_tag:false:${draftId}`).setLabel('false：不需要 Server Tag').setStyle(ButtonStyle.Secondary),
+        )],
+        ephemeral: true,
+      });
       return;
     }
     const value = interaction.fields.getTextInputValue('value').trim();
