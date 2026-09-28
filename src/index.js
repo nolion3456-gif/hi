@@ -225,7 +225,6 @@ function formatDuration(milliseconds) {
 }
 
 function giveawayEmbed(giveaway, ended = false) {
-  const tagText = giveaway.requireServerTag ? '\n要求装备当前服务器 Tag：**是**' : '';
   const requirements = [];
   if (giveaway.requiredRoleIds?.length) requirements.push(`需要身份组：${giveaway.requiredRoleIds.map((id) => `<@&${id}>`).join('、')}`);
   if (giveaway.blacklistedRoleIds?.length) requirements.push(`禁止身份组：${giveaway.blacklistedRoleIds.map((id) => `<@&${id}>`).join('、')}`);
@@ -234,13 +233,13 @@ function giveawayEmbed(giveaway, ended = false) {
   if (giveaway.messageRequirement) requirements.push(`本服务器至少发送 **${giveaway.messageRequirement} 条消息**`);
   if (giveaway.levelRequirement) requirements.push(`等级至少 **${giveaway.levelRequirement}**`);
   if (giveaway.bypassRoleIds?.length) requirements.push(`绕过条件身份组：${giveaway.bypassRoleIds.map((id) => `<@&${id}>`).join('、')}`);
-  if (giveaway.extraEntries?.length) requirements.push('身份组可获得额外入场次数');
+  if (giveaway.extraEntries?.length) requirements.push(`额外入场：${giveaway.extraEntries.map((item) => `<@&${item.roleId}> +${item.entries} 次`).join('、')}`);
   if (giveaway.firstEntries) requirements.push(`前 **${giveaway.firstEntries}** 位参加者直接获奖`);
   const winnerText = giveaway.winnerIds?.length ? `\n\n获奖者：${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')}` : '';
   return new EmbedBuilder()
     .setColor(ended ? 0x747f8d : 0x5865f2)
     .setTitle(ended ? `🎉 抽奖结束：${giveaway.prize}` : `🎉 ${giveaway.prize}`)
-    .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}${tagText}${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
+    .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
     .addFields(
       { name: '获奖人数', value: String(giveaway.winnerCount), inline: true },
       { name: '参与人数', value: String(giveaway.entries.length), inline: true },
@@ -306,13 +305,16 @@ function giveawayAdvancedEmbed(draft) {
       `必需身份组：${draft.requiredRoleIds?.length ? draft.requiredRoleIds.map((id) => `<@&${id}>`).join('、') : '未设置'}`,
       `绕过身份组：${draft.bypassRoleIds?.length ? draft.bypassRoleIds.map((id) => `<@&${id}>`).join('、') : '未设置'}`,
       `黑名单身份组：${draft.blacklistedRoleIds?.length ? draft.blacklistedRoleIds.map((id) => `<@&${id}>`).join('、') : '未设置'}`,
+      `需要装备当前服务器 Server Tag：${draft.requireServerTag ? 'true' : 'false'}`,
       `账号年龄：${draft.accountAgeDays || 0} 天 · 入服时间：${draft.serverAgeDays || 0} 天`,
       `消息要求：${draft.messageRequirement || 0} 条 · 等级要求：${draft.levelRequirement || 0}`,
       `额外入场身份组：${draft.extraEntries?.length ? '已设置' : '未设置'} · 前 N 位：${draft.firstEntries || 0}`,
     ].join('\n'));
 }
 
-function giveawayAdvancedButtons(draftId) {
+function giveawayAdvancedButtons(draftOrId) {
+  const draftId = typeof draftOrId === 'string' ? draftOrId : draftOrId.id;
+  const requireServerTag = typeof draftOrId === 'string' ? false : Boolean(draftOrId.requireServerTag);
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`giveaway_required_roles:${draftId}`).setLabel('必需身份组').setStyle(ButtonStyle.Primary),
@@ -325,6 +327,7 @@ function giveawayAdvancedButtons(draftId) {
       new ButtonBuilder().setCustomId(`giveaway_first_entries:${draftId}`).setLabel('前 N 位获奖').setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`giveaway_tag_toggle:${draftId}`).setLabel(`Server Tag：${requireServerTag ? 'true（需要）' : 'false（不需要）'}`).setStyle(requireServerTag ? ButtonStyle.Success : ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`giveaway_advanced_refresh:${draftId}`).setLabel('刷新条件').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`giveaway_publish:${draftId}`).setLabel('发布抽奖').setStyle(ButtonStyle.Success),
     ),
@@ -794,7 +797,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const config = getGuildSettings(interaction.guild.id);
 
   if (interaction.isButton()) {
-    if (interaction.customId.startsWith('giveaway_tag:')) {
+    if (interaction.customId.startsWith('giveaway_tag_toggle:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft || draft.guildId !== interaction.guild.id || draft.hostId !== interaction.user.id) {
+        await interaction.reply({ content: '这个抽奖设置已过期，请重新执行 `/giveaway`。', ephemeral: true });
+        return;
+      }
+      draft.requireServerTag = !draft.requireServerTag;
+      await interaction.update({ embeds: [giveawayAdvancedEmbed(draft)], components: giveawayAdvancedButtons(draft) });
+    } else if (interaction.customId.startsWith('giveaway_tag:')) {
       const [, tagValue, draftId] = interaction.customId.split(':');
       const draft = pendingGiveawayDrafts.get(draftId);
       if (!draft || draft.guildId !== interaction.guild.id || draft.hostId !== interaction.user.id) {
@@ -846,7 +858,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const draftId = interaction.customId.split(':')[1];
       const draft = pendingGiveawayDrafts.get(draftId);
       if (!draft) await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true });
-      else await interaction.update({ embeds: [giveawayAdvancedEmbed(draft)], components: giveawayAdvancedButtons(draftId) });
+      else await interaction.update({ embeds: [giveawayAdvancedEmbed(draft)], components: giveawayAdvancedButtons(draft) });
     } else if (interaction.customId === 'giveaway_create') {
       await interaction.showModal(giveawayModal());
     } else if (interaction.customId === 'giveaway_refresh') {
@@ -1000,18 +1012,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         prize,
         description,
         winnerCount,
+        requireServerTag: false,
+        requiredRoleIds: [],
+        bypassRoleIds: [],
+        blacklistedRoleIds: [],
+        extraEntries: [],
         hostId: interaction.user.id,
         hostName: interaction.user.tag,
         duration,
       });
-      await interaction.reply({
-        content: '请选择这次抽奖是否要求成员装备当前服务器的 Server Tag：',
-        components: [new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`giveaway_tag:true:${draftId}`).setLabel('true：需要 Server Tag').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`giveaway_tag:false:${draftId}`).setLabel('false：不需要 Server Tag').setStyle(ButtonStyle.Secondary),
-        )],
-        ephemeral: true,
-      });
+      const draft = pendingGiveawayDrafts.get(draftId);
+      draft.id = draftId;
+      await interaction.reply({ content: '请在同一个私密面板设置所有抽奖条件，完成后点击“发布抽奖”。', embeds: [giveawayAdvancedEmbed(draft)], components: giveawayAdvancedButtons(draft), ephemeral: true });
       return;
     }
     const value = interaction.fields.getTextInputValue('value').trim();
