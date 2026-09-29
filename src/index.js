@@ -84,6 +84,15 @@ function getGuildSettings(guildId) {
       },
       moderationLogChannelId: '',
       moderationPrefix: '!',
+      serverStats: {
+        enabled: false,
+        totalChannelId: '',
+        onlineChannelId: '',
+        botChannelId: '',
+        totalName: '👥 成员：{count}',
+        onlineName: '🟢 在线：{count}',
+        botName: '🤖 机器人：{count}',
+      },
     };
   }
   if (!settings[guildId].rolePanel) {
@@ -99,6 +108,17 @@ function getGuildSettings(guildId) {
   if (!Object.prototype.hasOwnProperty.call(settings[guildId], 'moderationPrefix')) {
     settings[guildId].moderationPrefix = '!';
   }
+  if (!settings[guildId].serverStats) settings[guildId].serverStats = {};
+  settings[guildId].serverStats = {
+    enabled: false,
+    totalChannelId: '',
+    onlineChannelId: '',
+    botChannelId: '',
+    totalName: '👥 成员：{count}',
+    onlineName: '🟢 在线：{count}',
+    botName: '🤖 机器人：{count}',
+    ...settings[guildId].serverStats,
+  };
   return settings[guildId];
 }
 
@@ -215,6 +235,66 @@ function moderationPanelComponents() {
     new ButtonBuilder().setCustomId('moderation_prefix').setLabel('设置 Prefix 符号').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('moderation_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
   )];
+}
+
+function serverStatsEmbed(guild, config) {
+  const stats = config.serverStats;
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('服务器统计设置')
+    .setDescription(`状态：${stats.enabled ? '开启' : '关闭'}\n\n` +
+      `成员统计：${stats.totalChannelId ? `<#${stats.totalChannelId}>` : '尚未创建'} · 名称：\`${stats.totalName}\`\n` +
+      `在线统计：${stats.onlineChannelId ? `<#${stats.onlineChannelId}>` : '尚未创建'} · 名称：\`${stats.onlineName}\`\n` +
+      `机器人统计：${stats.botChannelId ? `<#${stats.botChannelId}>` : '尚未创建'} · 名称：\`${stats.botName}\`\n\n` +
+      '支持变量：`{count}`。频道名称可以自由加入表情符号。')
+    .setFooter({ text: `${guild.name} · 统计频道会自动更新` });
+}
+
+function serverStatsComponents(stats) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('serverstats_setup').setLabel('设置频道名称').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('serverstats_update').setLabel('立即更新').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('serverstats_toggle').setLabel(stats.enabled ? '关闭统计' : '开启统计').setStyle(stats.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+  )];
+}
+
+function serverStatsModal(stats) {
+  const fields = [
+    ['total_name', '成员统计频道名称', stats.totalName, '例如：👥 成员：{count}'],
+    ['online_name', '在线统计频道名称', stats.onlineName, '例如：🟢 在线：{count}'],
+    ['bot_name', '机器人统计频道名称', stats.botName, '例如：🤖 机器人：{count}'],
+  ];
+  return new ModalBuilder().setCustomId('serverstats_modal').setTitle('设置服务器统计频道').addComponents(
+    ...fields.map(([id, label, value, placeholder]) => new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setValue(value).setPlaceholder(placeholder).setMaxLength(100))),
+  );
+}
+
+async function updateServerStats(guild) {
+  const config = getGuildSettings(guild.id);
+  const stats = config.serverStats;
+  if (!stats.enabled) return;
+  await guild.members.fetch().catch(() => null);
+  const members = guild.members.cache;
+  const values = {
+    total: members.size || guild.memberCount,
+    online: members.filter((member) => member.presence && member.presence.status !== 'offline').size,
+    bots: members.filter((member) => member.user.bot).size,
+  };
+  const definitions = [
+    ['totalChannelId', 'totalName', values.total],
+    ['onlineChannelId', 'onlineName', values.online],
+    ['botChannelId', 'botName', values.bots],
+  ];
+  for (const [channelKey, nameKey, count] of definitions) {
+    let channel = stats[channelKey] ? await guild.channels.fetch(stats[channelKey]).catch(() => null) : null;
+    if (!channel) {
+      channel = await guild.channels.create({ name: stats[nameKey].replaceAll('{count}', String(count)), type: ChannelType.GuildVoice, reason: '创建服务器统计频道' }).catch((error) => { console.error('Could not create stats channel:', error); return null; });
+      if (!channel) continue;
+      stats[channelKey] = channel.id;
+    }
+    await channel.setName(stats[nameKey].replaceAll('{count}', String(count)).slice(0, 100)).catch(console.error);
+  }
+  saveSettings();
 }
 
 function parseDuration(value) {
@@ -526,6 +606,7 @@ const commands = [
   new SlashCommandBuilder().setName('welcome').setDescription('打开欢迎和离开设置面板。'),
   new SlashCommandBuilder().setName('roles').setDescription('打开身份组面板设置。'),
   new SlashCommandBuilder().setName('moderation').setDescription('打开管理员惩罚系统设置。'),
+  new SlashCommandBuilder().setName('serverstats').setDescription('打开服务器统计频道设置。'),
   new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
   new SlashCommandBuilder()
     .setName('mute').setDescription('暂时禁言一名成员。')
@@ -572,7 +653,7 @@ async function registerCommands() {
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildPresences],
 });
 
 client.on(Events.MessageCreate, (message) => {
@@ -607,6 +688,7 @@ client.once(Events.ClientReady, (readyClient) => {
       else scheduleGiveaway(giveaway);
     }
   }
+  for (const guild of readyClient.guilds.cache.values()) updateServerStats(guild).catch(console.error);
 });
 
 client.on(Events.GuildCreate, async (guild) => {
@@ -643,6 +725,9 @@ async function sendLeave(member) {
 
 client.on(Events.GuildMemberAdd, sendWelcome);
 client.on(Events.GuildMemberRemove, sendLeave);
+client.on(Events.GuildMemberAdd, (member) => updateServerStats(member.guild).catch(console.error));
+client.on(Events.GuildMemberRemove, (member) => updateServerStats(member.guild).catch(console.error));
+client.on(Events.PresenceUpdate, (_oldPresence, presence) => updateServerStats(presence.guild).catch(console.error));
 
 function moderationEmbed(guild, action, target, duration, reason, executor, actionChannel, directMessage = false) {
   const targetId = target.id || target.user?.id;
@@ -828,7 +913,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'welcome') {
@@ -852,6 +937,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [moderationPanelEmbed(interaction.guild, config)], components: moderationPanelComponents(), ephemeral: true });
+    } else if (interaction.commandName === 'serverstats') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置服务器统计。', ephemeral: true });
+        return;
+      }
+      const config = getGuildSettings(interaction.guild.id);
+      await interaction.reply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats), ephemeral: true });
     } else if (interaction.commandName === 'giveaway') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以创建和管理抽奖。', ephemeral: true });
@@ -1065,6 +1157,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         saveSettings();
         await interaction.update({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) });
       }
+    } else if (interaction.customId === 'serverstats_setup') {
+      await interaction.showModal(serverStatsModal(config.serverStats));
+    } else if (interaction.customId === 'serverstats_update') {
+      config.serverStats.enabled = true;
+      await updateServerStats(interaction.guild);
+      await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+    } else if (interaction.customId === 'serverstats_toggle') {
+      config.serverStats.enabled = !config.serverStats.enabled;
+      saveSettings();
+      if (config.serverStats.enabled) await updateServerStats(interaction.guild);
+      await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
     } else if (interaction.customId === 'moderation_log_channel') {
       const menu = new ChannelSelectMenuBuilder()
         .setCustomId('moderation_log_channel_select')
@@ -1195,6 +1298,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isModalSubmit()) {
+    if (interaction.customId === 'serverstats_modal') {
+      const stats = config.serverStats;
+      stats.totalName = interaction.fields.getTextInputValue('total_name').trim() || '👥 成员：{count}';
+      stats.onlineName = interaction.fields.getTextInputValue('online_name').trim() || '🟢 在线：{count}';
+      stats.botName = interaction.fields.getTextInputValue('bot_name').trim() || '🤖 机器人：{count}';
+      stats.enabled = true;
+      await updateServerStats(interaction.guild);
+      await interaction.reply({ content: '服务器统计频道已开启并更新。频道名称支持 `{count}` 和表情符号。', ephemeral: true });
+      return;
+    }
     if (interaction.customId === 'moderation_prefix_modal') {
       const prefix = interaction.fields.getTextInputValue('value').trim();
       if (!prefix || prefix.length > 3 || /\s/.test(prefix) || prefix.startsWith('/')) {
