@@ -63,6 +63,7 @@ function saveSettings() {
 
 const giveawayTimers = new Map();
 const pendingGiveawayDrafts = new Map();
+const REROLL_WINDOW_MS = 7 * 86_400_000;
 let giveawayMessageSaveCounter = 0;
 
 function getGuildSettings(guildId) {
@@ -82,6 +83,7 @@ function getGuildSettings(guildId) {
         roles: [],
       },
       moderationLogChannelId: '',
+      moderationPrefix: '!',
     };
   }
   if (!settings[guildId].rolePanel) {
@@ -93,6 +95,9 @@ function getGuildSettings(guildId) {
   }
   if (!Object.prototype.hasOwnProperty.call(settings[guildId], 'moderationLogChannelId')) {
     settings[guildId].moderationLogChannelId = '';
+  }
+  if (!Object.prototype.hasOwnProperty.call(settings[guildId], 'moderationPrefix')) {
+    settings[guildId].moderationPrefix = '!';
   }
   return settings[guildId];
 }
@@ -187,6 +192,7 @@ function roleConfigComponents(roleConfig) {
       new ButtonBuilder().setCustomId('role_title').setLabel('设置面板标题').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('role_description').setLabel('设置面板文字').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('role_add').setLabel('添加身份组').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('role_remove').setLabel('移除身份组').setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId('role_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
@@ -199,13 +205,14 @@ function moderationPanelEmbed(guild, config) {
   return new EmbedBuilder()
     .setColor(0xed4245)
     .setTitle('管理员惩罚系统设置')
-    .setDescription(`惩罚日志频道：${config.moderationLogChannelId ? `<#${config.moderationLogChannelId}>` : '未设置'}\n\n每次 mute、unmute、kick、ban、unban 操作都会记录到这个频道。`)
+    .setDescription(`惩罚日志频道：${config.moderationLogChannelId ? `<#${config.moderationLogChannelId}>` : '未设置'}\nPrefix 指令符号：\`${config.moderationPrefix}\`\n\n每次 mute、unmute、kick、ban、unban 操作都会记录到这个频道。`)
     .setFooter({ text: `${guild.name} · 只有拥有管理服务器权限者可以操作` });
 }
 
 function moderationPanelComponents() {
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('moderation_log_channel').setLabel('设置惩罚日志频道').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('moderation_prefix').setLabel('设置 Prefix 符号').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('moderation_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
   )];
 }
@@ -277,11 +284,14 @@ function giveawayPanelButtons(giveaways, guildId) {
     new ButtonBuilder().setCustomId('giveaway_refresh').setLabel('刷新面板').setStyle(ButtonStyle.Secondary),
   )];
   for (const item of selected) {
-    rows.push(new ActionRowBuilder().addComponents(
-      item.status === 'active'
-        ? new ButtonBuilder().setCustomId(`giveaway_end:${item.id}`).setLabel(`结束：${item.prize}`.slice(0, 80)).setStyle(ButtonStyle.Danger)
-        : new ButtonBuilder().setCustomId(`giveaway_reroll:${item.id}`).setLabel(`重抽：${item.prize}`.slice(0, 80)).setStyle(ButtonStyle.Secondary),
-    ));
+    if (item.status === 'active') {
+      rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`giveaway_end:${item.id}`).setLabel(`结束：${item.prize}`.slice(0, 80)).setStyle(ButtonStyle.Danger)));
+    } else {
+      const buttons = [];
+      if (Date.now() - (item.endedAt || item.endsAt) <= REROLL_WINDOW_MS) buttons.push(new ButtonBuilder().setCustomId(`giveaway_reroll:${item.id}`).setLabel(`重抽：${item.prize}`.slice(0, 70)).setStyle(ButtonStyle.Secondary));
+      buttons.push(new ButtonBuilder().setCustomId(`giveaway_clear:${item.id}`).setLabel(`清除：${item.prize}`.slice(0, 70)).setStyle(ButtonStyle.Danger));
+      rows.push(new ActionRowBuilder().addComponents(buttons));
+    }
   }
   return rows.slice(0, 5);
 }
@@ -456,6 +466,7 @@ async function finishGiveaway(giveawayId, reroll = false, firstCome = false) {
   const winnerLimit = firstCome && giveaway.firstEntries ? giveaway.firstEntries : giveaway.winnerCount;
   giveaway.winnerIds = [...new Set(shuffled)].slice(0, winnerLimit);
   giveaway.status = 'ended';
+  giveaway.endedAt = Date.now();
   saveSettings();
   if (giveawayTimers.has(giveawayId)) clearTimeout(giveawayTimers.get(giveawayId));
   if (message) await message.edit({ embeds: [giveawayEmbed(giveaway, true)], components: giveawayButtons(giveaway, true) }).catch(console.error);
@@ -561,11 +572,23 @@ async function registerCommands() {
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot) return;
+  const moderationConfig = getGuildSettings(message.guild.id);
+  const prefix = moderationConfig.moderationPrefix || '!';
+  if (message.content.startsWith(prefix)) {
+    const parts = message.content.slice(prefix.length).trim().split(/\s+/);
+    const action = parts.shift()?.toLowerCase();
+    if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(action)) {
+      const target = parts.shift();
+      const duration = action === 'mute' ? parts.shift() : '';
+      const reason = parts.join(' ');
+      performPrefixModeration(message, action, { target, duration, reason }).catch((error) => console.error('Prefix moderation error:', error));
+    }
+  }
   settings.giveawayMessages[message.guild.id] ||= {};
   settings.giveawayMessages[message.guild.id][message.author.id] = (settings.giveawayMessages[message.guild.id][message.author.id] || 0) + 1;
   giveawayMessageSaveCounter += 1;
@@ -745,6 +768,54 @@ async function performModeration(interaction, action) {
     console.error(`${action} failed:`, error);
     await interaction.editReply({ content: `执行 /${action} 失败，请检查 Bot 权限、身份组层级和目标成员状态。` }).catch(() => {});
   }
+}
+
+async function performPrefixModeration(message, action, args) {
+  if (!message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    await message.reply('只有拥有“管理服务器”权限的管理员可以使用惩罚指令。');
+    return;
+  }
+  const config = getGuildSettings(message.guild.id);
+  const reason = (args.reason || '未填写').slice(0, 512);
+  if (action === 'unban') {
+    const userId = args.target;
+    if (!/^\d{15,25}$/.test(userId || '')) { await message.reply('用法：unban 用户ID 原因'); return; }
+    const target = await client.users.fetch(userId).catch(() => null);
+    const ban = await message.guild.bans.fetch(userId).catch(() => null);
+    if (!target || !ban) { await message.reply('找不到这个用户，或这个用户目前没有被本服务器封禁。'); return; }
+    try {
+      await message.guild.members.unban(userId, reason);
+      await message.reply(`已解除 **${target.tag}** 的封禁。`);
+      Promise.all([
+        logModeration(message.guild, config, 'unban', target, '', reason, message.author, message.channel),
+        notifyModeratedUser(message.guild, 'unban', target, '', reason, message.author, message.channel),
+      ]).catch(console.error);
+    } catch (error) { console.error('Prefix unban failed:', error); await message.reply('解除封禁失败，请检查 Bot 权限。'); }
+    return;
+  }
+  const targetId = (args.target || '').match(/^<@!?([0-9]{15,25})>$/)?.[1] || args.target;
+  const member = await message.guild.members.fetch(targetId).catch(() => null);
+  if (!member) { await message.reply('找不到这个服务器成员。用法：mute @成员 10m 原因'); return; }
+  if (member.id === message.author.id) { await message.reply('不能对自己执行这个操作。'); return; }
+  if ((action === 'mute' || action === 'unmute') && !member.moderatable) { await message.reply('Bot 无法管理这个成员，请检查身份组层级和权限。'); return; }
+  if (action === 'kick' && !member.kickable) { await message.reply('Bot 无法踢出这个成员，请检查身份组层级和权限。'); return; }
+  if (action === 'ban' && !member.bannable) { await message.reply('Bot 无法封禁这个成员，请检查身份组层级和权限。'); return; }
+  let durationText = '';
+  try {
+    if (action === 'mute') {
+      const duration = parseDuration(args.duration);
+      if (!duration) { await message.reply('用法：mute @成员 10m 原因；时长最长 28 天。'); return; }
+      durationText = formatDuration(duration);
+      await member.timeout(duration, reason);
+    } else if (action === 'unmute') await member.timeout(null, reason);
+    else if (action === 'kick') await member.kick(reason);
+    else if (action === 'ban') await member.ban({ reason, deleteMessageSeconds: 0 });
+    await message.reply(`已对 **${member.user.tag}** 执行 ${config.moderationPrefix}${action}${action === 'mute' ? `（${durationText}）` : ''}。`);
+    Promise.all([
+      logModeration(message.guild, config, action, member, durationText, reason, message.author, message.channel),
+      notifyModeratedUser(message.guild, action, member, durationText, reason, message.author, message.channel),
+    ]).catch(console.error);
+  } catch (error) { console.error(`Prefix ${action} failed:`, error); await message.reply(`执行 ${config.moderationPrefix}${action} 失败，请检查 Bot 权限和身份组层级。`); }
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -983,7 +1054,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else if (interaction.customId.startsWith('giveaway_reroll:')) {
       const giveaway = settings.giveaways[interaction.customId.split(':')[1]];
       if (!giveaway || giveaway.status !== 'ended') await interaction.reply({ content: '只有已经结束的抽奖才能重抽。', ephemeral: true });
+      else if (Date.now() - (giveaway.endedAt || giveaway.endsAt) > REROLL_WINDOW_MS) await interaction.reply({ content: '这个抽奖结束已超过 7 天，重抽功能已自动关闭。', ephemeral: true });
       else { await interaction.deferUpdate(); await finishGiveaway(giveaway.id, true); }
+    } else if (interaction.customId.startsWith('giveaway_clear:')) {
+      const giveawayId = interaction.customId.split(':')[1];
+      const giveaway = settings.giveaways[giveawayId];
+      if (!giveaway) await interaction.reply({ content: '这个抽奖记录不存在。', ephemeral: true });
+      else {
+        delete settings.giveaways[giveawayId];
+        saveSettings();
+        await interaction.update({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) });
+      }
     } else if (interaction.customId === 'moderation_log_channel') {
       const menu = new ChannelSelectMenuBuilder()
         .setCustomId('moderation_log_channel_select')
@@ -992,6 +1073,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setMinValues(1)
         .setMaxValues(1);
       await interaction.reply({ content: '请选择查看 mute、unmute、kick、ban、unban 记录的频道：', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+    } else if (interaction.customId === 'moderation_prefix') {
+      await interaction.showModal(textModal('moderation_prefix_modal', '设置 Prefix 指令符号', '符号（1至3个字符）', config.moderationPrefix));
     } else if (interaction.customId === 'moderation_refresh') {
       await interaction.update({ embeds: [moderationPanelEmbed(interaction.guild, config)], components: moderationPanelComponents() });
     } else if (interaction.customId === 'role_title') {
@@ -1005,6 +1088,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setMinValues(1)
         .setMaxValues(1);
       await interaction.reply({ content: '请选择身份组，下一步再输入按钮文字：', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+    } else if (interaction.customId === 'role_remove') {
+      const menu = new RoleSelectMenuBuilder()
+        .setCustomId('role_remove_select')
+        .setPlaceholder('选择要从面板移除的身份组')
+        .setMinValues(1)
+        .setMaxValues(25);
+      await interaction.reply({ content: '请选择要移除的身份组，可多选；不会删除服务器身份组。', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
     } else if (interaction.customId === 'role_refresh') {
       await interaction.update({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: roleConfigComponents(config.rolePanel) });
     } else if (interaction.customId === 'role_publish') {
@@ -1073,6 +1163,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.update({ content: '身份组条件已保存，请回到抽奖进阶条件面板继续设置。', components: [] });
       return;
     }
+    if (interaction.customId === 'role_remove_select') {
+      const before = config.rolePanel.roles.length;
+      config.rolePanel.roles = config.rolePanel.roles.filter((item) => !interaction.values.includes(item.roleId));
+      saveSettings();
+      await interaction.update({ content: before === config.rolePanel.roles.length ? '这些身份组目前没有加入身份组面板。' : `已从面板移除 ${before - config.rolePanel.roles.length} 个身份组。请回到原来的私密面板并点击“刷新”。`, components: [] });
+      return;
+    }
     if (interaction.customId !== 'role_add_select') return;
     const roleId = interaction.values[0];
     const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
@@ -1098,6 +1195,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isModalSubmit()) {
+    if (interaction.customId === 'moderation_prefix_modal') {
+      const prefix = interaction.fields.getTextInputValue('value').trim();
+      if (!prefix || prefix.length > 3 || /\s/.test(prefix) || prefix.startsWith('/')) {
+        await interaction.reply({ content: 'Prefix 必须是 1 至 3 个不含空格的字符，不能使用 `/`。', ephemeral: true });
+        return;
+      }
+      config.moderationPrefix = prefix;
+      saveSettings();
+      await interaction.reply({ content: `Prefix 已设置为：\`${prefix}\`。例如：\`${prefix}mute @成员 10m 原因\``, ephemeral: true });
+      return;
+    }
     if (interaction.customId.startsWith('giveaway_repeat_modal:')) {
       const draftId = interaction.customId.split(':')[1];
       const draft = pendingGiveawayDrafts.get(draftId);
