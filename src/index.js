@@ -18,6 +18,8 @@ const {
   Routes,
   RoleSelectMenuBuilder,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
@@ -53,6 +55,7 @@ function loadSettings() {
 let settings = loadSettings();
 if (!settings.giveaways) settings.giveaways = {};
 if (!settings.giveawayMessages) settings.giveawayMessages = {};
+if (!settings.giveawayTemplates) settings.giveawayTemplates = {};
 
 function saveSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
@@ -309,6 +312,8 @@ function giveawayAdvancedEmbed(draft) {
       `账号年龄：${draft.accountAgeDays || 0} 天 · 入服时间：${draft.serverAgeDays || 0} 天`,
       `消息要求：${draft.messageRequirement || 0} 条 · 等级要求：${draft.levelRequirement || 0}`,
       `额外入场身份组：${draft.extraEntries?.length ? '已设置' : '未设置'} · 前 N 位：${draft.firstEntries || 0}`,
+      `重复抽奖：${draft.repeatCount ? `剩余 ${draft.repeatCount} 次，每 ${formatDuration(draft.repeatEvery || draft.duration)} 自动重开` : '关闭'}`,
+      `获奖身份组：${draft.winnerRoleId ? `<@&${draft.winnerRoleId}>` : '未设置'} · 获奖讨论串：${draft.winnerThread ? '开启' : '关闭'}`,
     ].join('\n'));
 }
 
@@ -331,7 +336,30 @@ function giveawayAdvancedButtons(draftOrId) {
       new ButtonBuilder().setCustomId(`giveaway_advanced_refresh:${draftId}`).setLabel('刷新条件').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`giveaway_publish:${draftId}`).setLabel('发布抽奖').setStyle(ButtonStyle.Success),
     ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`giveaway_repeat:${draftId}`).setLabel('设置重复抽奖').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`giveaway_winner_role:${draftId}`).setLabel('获奖身份组').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`giveaway_winner_thread:${draftId}`).setLabel(`获奖讨论串：${draftOrId.winnerThread ? '开' : '关'}`).setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`giveaway_template_save:${draftId}`).setLabel('保存为模板').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`giveaway_template_load:${draftId}`).setLabel('载入模板').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`giveaway_stats:${draftId}`).setLabel('查看统计').setStyle(ButtonStyle.Secondary),
+    ),
   ];
+}
+
+function giveawayRepeatModal(draft) {
+  return new ModalBuilder().setCustomId(`giveaway_repeat_modal:${draft.id}`).setTitle('设置重复抽奖').addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('count').setLabel('重复次数（0 关闭）').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(draft.repeatCount || 0))),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('interval').setLabel('每次间隔').setStyle(TextInputStyle.Short).setRequired(false).setValue(draft.repeatEvery ? formatDuration(draft.repeatEvery) : '').setPlaceholder('例如：1d；留空使用抽奖持续时间')),
+  );
+}
+
+function giveawayTemplateModal(draft) {
+  return new ModalBuilder().setCustomId(`giveaway_template_modal:${draft.id}`).setTitle('保存抽奖模板').addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('name').setLabel('模板名称').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80)),
+  );
 }
 
 function giveawayNumericModal(draft) {
@@ -352,6 +380,34 @@ function giveawayExtraEntriesModal(draft) {
   return new ModalBuilder().setCustomId(`giveaway_extra_entries_modal:${draft.id}`).setTitle('设置额外入场次数').addComponents(
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('entries').setLabel('身份组与额外次数').setStyle(TextInputStyle.Paragraph).setRequired(false).setValue((draft.extraEntries || []).map((item) => `${item.roleId}=${item.entries}`).join('\n')).setPlaceholder('每行一个：身份组ID=额外次数，例如 123456789=2').setMaxLength(1000)),
   );
+}
+
+function giveawayStatsEmbed(guild, giveaways) {
+  const list = giveaways.filter((item) => item.guildId === guild.id);
+  const ended = list.filter((item) => item.status === 'ended');
+  const entries = list.reduce((sum, item) => sum + (item.entries?.length || 0), 0);
+  const winners = ended.reduce((sum, item) => sum + (item.winnerIds?.length || 0), 0);
+  return new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle('抽奖统计')
+    .addFields(
+      { name: '抽奖总数', value: String(list.length), inline: true },
+      { name: '进行中', value: String(list.filter((item) => item.status === 'active').length), inline: true },
+      { name: '已结束', value: String(ended.length), inline: true },
+      { name: '累计参与人次', value: String(entries), inline: true },
+      { name: '累计获奖人数', value: String(winners), inline: true },
+      { name: '模板数量', value: String(Object.values(settings.giveawayTemplates).filter((item) => item.guildId === guild.id).length), inline: true },
+    )
+    .setFooter({ text: `${guild.name} · 统计仅管理员可见` });
+}
+
+function templateSelect(guildId, draftId) {
+  const templates = Object.values(settings.giveawayTemplates).filter((item) => item.guildId === guildId).slice(0, 25);
+  if (!templates.length) return null;
+  return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+    .setCustomId(`giveaway_template_select:${draftId}`)
+    .setPlaceholder('选择要载入的模板')
+    .addOptions(templates.map((item) => new StringSelectMenuOptionBuilder().setLabel(item.name.slice(0, 100)).setValue(item.id).setDescription(`${item.prize}`.slice(0, 100)))));
 }
 
 function userHasRequiredTag(user, guildId, requireServerTag) {
@@ -403,7 +459,33 @@ async function finishGiveaway(giveawayId, reroll = false, firstCome = false) {
   saveSettings();
   if (giveawayTimers.has(giveawayId)) clearTimeout(giveawayTimers.get(giveawayId));
   if (message) await message.edit({ embeds: [giveawayEmbed(giveaway, true)], components: giveawayButtons(giveaway, true) }).catch(console.error);
-  if (channel?.isTextBased()) await channel.send(`🎉 恭喜 ${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')} 获得 **${giveaway.prize}**！`).catch(console.error);
+  if (channel?.isTextBased()) {
+    const winnerMessage = await channel.send(`🎉 恭喜 ${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')} 获得 **${giveaway.prize}**！`).catch(() => null);
+    if (giveaway.winnerRoleId) {
+      const role = await guild.roles.fetch(giveaway.winnerRoleId).catch(() => null);
+      if (role && !role.managed && role.position < guild.members.me.roles.highest.position) {
+        await Promise.all(giveaway.winnerIds.map(async (userId) => {
+          const winner = await guild.members.fetch(userId).catch(() => null);
+          return winner?.roles.add(role).catch(console.error);
+        }));
+      }
+    }
+    if (giveaway.winnerThread && winnerMessage?.startThread) {
+      await winnerMessage.startThread({ name: `🎉 ${giveaway.prize} 获奖者讨论`, autoArchiveDuration: 1440, reason: '抽奖获奖者讨论串' }).catch(console.error);
+    }
+  }
+  if (giveaway.repeatCount > 0) {
+    giveaway.repeatCount -= 1;
+    const next = { ...giveaway, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, messageId: '', entries: [], entryWeights: 0, entryWeightByUser: {}, winnerIds: [], createdAt: Date.now(), endsAt: Date.now() + (giveaway.repeatEvery || giveaway.duration), status: 'active' };
+    delete next.lastWinnerId;
+    const nextMessage = channel?.isTextBased() ? await channel.send({ embeds: [giveawayEmbed(next)], components: giveawayButtons(next) }).catch(() => null) : null;
+    if (nextMessage) next.messageId = nextMessage.id;
+    if (nextMessage) {
+      settings.giveaways[next.id] = next;
+      saveSettings();
+      scheduleGiveaway(next);
+    }
+  }
   return giveaway;
 }
 
@@ -842,6 +924,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!draft) { await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true }); return; }
       draft.id = draftId;
       await interaction.showModal(new ModalBuilder().setCustomId(`giveaway_first_entries_modal:${draftId}`).setTitle('设置前 N 位获奖').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('count').setLabel('前几位参加者直接获奖').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(draft.firstEntries || 0)).setPlaceholder('填写 0 表示关闭'))));
+    } else if (interaction.customId.startsWith('giveaway_repeat:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft) { await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true }); return; }
+      draft.id = draftId;
+      await interaction.showModal(giveawayRepeatModal(draft));
+    } else if (interaction.customId.startsWith('giveaway_winner_role:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft) { await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true }); return; }
+      await interaction.reply({ content: '请选择获奖后自动发放的身份组；此提示仅你可见。', components: [new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId(`giveaway_winner_role_select:${draftId}`).setPlaceholder('选择获奖身份组').setMinValues(1).setMaxValues(1))], ephemeral: true });
+    } else if (interaction.customId.startsWith('giveaway_winner_thread:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft) { await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true }); return; }
+      draft.winnerThread = !draft.winnerThread;
+      await interaction.update({ embeds: [giveawayAdvancedEmbed(draft)], components: giveawayAdvancedButtons(draft) });
+    } else if (interaction.customId.startsWith('giveaway_template_save:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft) { await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true }); return; }
+      draft.id = draftId;
+      await interaction.showModal(giveawayTemplateModal(draft));
+    } else if (interaction.customId.startsWith('giveaway_template_load:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const select = templateSelect(interaction.guild.id, draftId);
+      if (!select) await interaction.reply({ content: '这个服务器还没有保存的抽奖模板。', ephemeral: true });
+      else await interaction.reply({ content: '请选择要载入的模板；此提示仅你可见。', components: [select], ephemeral: true });
+    } else if (interaction.customId.startsWith('giveaway_stats:')) {
+      await interaction.reply({ embeds: [giveawayStatsEmbed(interaction.guild, Object.values(settings.giveaways))], ephemeral: true });
     } else if (interaction.customId.startsWith('giveaway_publish:')) {
       const draftId = interaction.customId.split(':')[1];
       const draft = pendingGiveawayDrafts.get(draftId);
@@ -942,6 +1054,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isRoleSelectMenu()) {
+    if (interaction.customId.startsWith('giveaway_winner_role_select:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft || draft.hostId !== interaction.user.id) { await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true }); return; }
+      const role = await interaction.guild.roles.fetch(interaction.values[0]).catch(() => null);
+      if (!role || role.managed || role.position >= interaction.guild.members.me.roles.highest.position) { await interaction.update({ content: '这个身份组无法由 Bot 发放，请选择 Bot 身份组以下的普通身份组。', components: [] }); return; }
+      draft.winnerRoleId = role.id;
+      await interaction.update({ content: `获奖身份组已设置为 ${role}。请回到抽奖进阶面板并点击“刷新条件”。`, components: [] });
+      return;
+    }
     if (/^giveaway_(required_roles|bypass_roles|blacklist_roles)_select:/.test(interaction.customId)) {
       const [kind, draftId] = interaction.customId.split(':');
       const draft = pendingGiveawayDrafts.get(draftId);
@@ -962,7 +1084,53 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('giveaway_template_select:')) {
+    const template = settings.giveawayTemplates[interaction.values[0]];
+    if (!template) { await interaction.reply({ content: '找不到这个模板。', ephemeral: true }); return; }
+    const draft = pendingGiveawayDrafts.get(interaction.customId.split(':')[1]);
+    if (draft && draft.hostId === interaction.user.id) {
+      Object.assign(draft, template.data);
+      await interaction.update({ content: '模板已载入，请回到进阶条件面板并点击“刷新条件”。', components: [] });
+    } else {
+      await interaction.reply({ content: '模板已保存；请重新创建抽奖后载入模板。', ephemeral: true });
+    }
+    return;
+  }
+
   if (interaction.isModalSubmit()) {
+    if (interaction.customId.startsWith('giveaway_repeat_modal:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      const count = Number(interaction.fields.getTextInputValue('count'));
+      const intervalText = interaction.fields.getTextInputValue('interval').trim();
+      const interval = intervalText ? parseDuration(intervalText) : draft?.duration;
+      if (!draft || !Number.isInteger(count) || count < 0 || count > 100 || !interval) { await interaction.reply({ content: '重复设置无效：次数必须是 0 至 100，间隔需使用例如 `1d`。', ephemeral: true }); return; }
+      draft.repeatCount = count;
+      draft.repeatEvery = interval;
+      await interaction.reply({ content: '重复抽奖设置已保存。请回到进阶面板并点击“刷新条件”。', ephemeral: true });
+      return;
+    }
+    if (interaction.customId.startsWith('giveaway_template_modal:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      if (!draft) { await interaction.reply({ content: '这个抽奖设置已过期。', ephemeral: true }); return; }
+      const templateId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      const name = interaction.fields.getTextInputValue('name').trim();
+      const { id, messageId, entries, entryWeights, entryWeightByUser, winnerIds, createdAt, endsAt, status, ...data } = draft;
+      settings.giveawayTemplates[templateId] = { id: templateId, guildId: interaction.guild.id, name, prize: draft.prize, data };
+      saveSettings();
+      await interaction.reply({ content: `模板「${name}」已保存。`, ephemeral: true });
+      return;
+    }
+    if (interaction.customId.startsWith('giveaway_first_entries_modal:')) {
+      const draftId = interaction.customId.split(':')[1];
+      const draft = pendingGiveawayDrafts.get(draftId);
+      const count = Number(interaction.fields.getTextInputValue('count'));
+      if (!draft || !Number.isInteger(count) || count < 0 || count > 100) { await interaction.reply({ content: '前 N 位必须是 0 至 100 的整数。', ephemeral: true }); return; }
+      draft.firstEntries = count;
+      await interaction.reply({ content: '前 N 位获奖设置已保存。请回到原来的私密面板继续设置。', ephemeral: true });
+      return;
+    }
     if (/^giveaway_numeric_modal:/.test(interaction.customId)) {
       const draftId = interaction.customId.split(':')[1];
       const draft = pendingGiveawayDrafts.get(draftId);
@@ -1017,6 +1185,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         bypassRoleIds: [],
         blacklistedRoleIds: [],
         extraEntries: [],
+        winnerRoleId: '',
+        winnerThread: false,
+        repeatCount: 0,
+        repeatEvery: 0,
         hostId: interaction.user.id,
         hostName: interaction.user.tag,
         duration,
