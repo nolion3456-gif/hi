@@ -7,6 +7,7 @@
 - `/ping` — 检查机器人延迟
 - `/help` — 查看帮助
 - `/about` — 查看机器人信息
+- `/message` — 查看自己的今日、本周、本月和总消息数
 - `/welcome` — 打开私密的欢迎/离开设置面板
 - `/roles` — 打开私密的身份组面板设置
 - `/moderation` — 设置惩罚日志频道
@@ -35,6 +36,17 @@
 ```
 
 成员加入、离开、在线状态变化以及 Bot 重启后都会更新统计频道。Bot 需要 **Manage Channels / 管理频道** 权限；在线人数统计需要开启 `Guild Presences` Gateway Intent。
+
+## 消息统计
+
+成员输入 `/message` 后会收到只有自己看得到的统计结果：
+
+- 今天的消息数
+- 本周的消息数（周一至今天）
+- 本月的消息数
+- 总消息数
+
+统计从 Bot 开始运行并收到消息事件后累计，统计时区为 `Asia/Shanghai`。需要开启 `Guild Messages` Gateway Intent。
 
 ## 抽奖系统（第一阶段）
 

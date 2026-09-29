@@ -55,10 +55,42 @@ function loadSettings() {
 let settings = loadSettings();
 if (!settings.giveaways) settings.giveaways = {};
 if (!settings.giveawayMessages) settings.giveawayMessages = {};
+if (!settings.messageStats) settings.messageStats = {};
 if (!settings.giveawayTemplates) settings.giveawayTemplates = {};
 
 function saveSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+}
+
+function shanghaiDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(date);
+}
+
+function messageStatsFor(guildId, userId) {
+  return settings.messageStats?.[guildId]?.[userId] || {};
+}
+
+function getMessageSummary(guildId, userId) {
+  const daily = messageStatsFor(guildId, userId);
+  const today = shanghaiDateKey();
+  const now = new Date(`${today}T12:00:00+08:00`);
+  const day = now.getUTCDay() || 7;
+  const weekStart = new Date(now);
+  weekStart.setUTCDate(now.getUTCDate() - day + 1);
+  const monthPrefix = `${today.slice(0, 7)}-`;
+  const weekKeys = new Set();
+  for (let index = 0; index < 7; index += 1) {
+    const current = new Date(weekStart);
+    current.setUTCDate(weekStart.getUTCDate() + index);
+    weekKeys.add(current.toISOString().slice(0, 10));
+  }
+  const entries = Object.entries(daily);
+  return {
+    today: Number(daily[today] || 0),
+    week: entries.filter(([key]) => weekKeys.has(key)).reduce((sum, [, value]) => sum + Number(value || 0), 0),
+    month: entries.filter(([key]) => key.startsWith(monthPrefix)).reduce((sum, [, value]) => sum + Number(value || 0), 0),
+    total: Number(settings.giveawayMessages?.[guildId]?.[userId] || entries.reduce((sum, [, value]) => sum + Number(value || 0), 0)),
+  };
 }
 
 const giveawayTimers = new Map();
@@ -603,6 +635,7 @@ const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('检查机器人是否在线。'),
   new SlashCommandBuilder().setName('help').setDescription('查看可用指令。'),
   new SlashCommandBuilder().setName('about').setDescription('查看机器人信息。'),
+  new SlashCommandBuilder().setName('message').setDescription('查看自己的消息统计。'),
   new SlashCommandBuilder().setName('welcome').setDescription('打开欢迎和离开设置面板。'),
   new SlashCommandBuilder().setName('roles').setDescription('打开身份组面板设置。'),
   new SlashCommandBuilder().setName('moderation').setDescription('打开管理员惩罚系统设置。'),
@@ -672,6 +705,10 @@ client.on(Events.MessageCreate, (message) => {
   }
   settings.giveawayMessages[message.guild.id] ||= {};
   settings.giveawayMessages[message.guild.id][message.author.id] = (settings.giveawayMessages[message.guild.id][message.author.id] || 0) + 1;
+  settings.messageStats[message.guild.id] ||= {};
+  settings.messageStats[message.guild.id][message.author.id] ||= {};
+  const dateKey = shanghaiDateKey();
+  settings.messageStats[message.guild.id][message.author.id][dateKey] = (settings.messageStats[message.guild.id][message.author.id][dateKey] || 0) + 1;
   giveawayMessageSaveCounter += 1;
   if (giveawayMessageSaveCounter >= 10) {
     giveawayMessageSaveCounter = 0;
@@ -913,9 +950,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
+    } else if (interaction.commandName === 'message') {
+      const summary = getMessageSummary(interaction.guild.id, interaction.user.id);
+      await interaction.reply({ content: `**${interaction.user.username} 的消息统计**\n\n今天：**${summary.today}** 条\n本周：**${summary.week}** 条\n本月：**${summary.month}** 条\n总数：**${summary.total}** 条\n\n统计时区：Asia/Shanghai`, ephemeral: true });
     } else if (interaction.commandName === 'welcome') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。', ephemeral: true });
