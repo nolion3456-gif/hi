@@ -64,10 +64,10 @@ function saveSettings() {
 }
 
 function getStickySettings(guildId) {
-  if (!settings.stickies[guildId]) settings.stickies[guildId] = { global: '', globalMessages: {}, channels: {}, refreshSeconds: 0 };
+  if (!settings.stickies[guildId]) settings.stickies[guildId] = { global: '', globalMessages: {}, channels: {}, refreshSeconds: 5 };
   settings.stickies[guildId].globalMessages ||= {};
   settings.stickies[guildId].channels ||= {};
-  if (!Number.isInteger(settings.stickies[guildId].refreshSeconds)) settings.stickies[guildId].refreshSeconds = 0;
+  if (!Number.isInteger(settings.stickies[guildId].refreshSeconds)) settings.stickies[guildId].refreshSeconds = 5;
   return settings.stickies[guildId];
 }
 
@@ -86,7 +86,7 @@ async function publishStickyToChannel(guild, channel, content) {
   const channelConfig = config.channels[channel.id] || {};
   const oldMessageId = config.global ? config.globalMessages[channel.id] : channelConfig.messageId;
   await deleteStickyMessage(channel, oldMessageId);
-  const sent = await channel.send({ content }).catch((error) => { console.error('Could not send sticky message:', error); return null; });
+  const sent = await channel.send({ content: `这是一条stick内容\n${content}` }).catch((error) => { console.error('Could not send sticky message:', error); return null; });
   if (!sent) return null;
   if (config.global) config.globalMessages[channel.id] = sent.id;
   else config.channels[channel.id] = { content, messageId: sent.id };
@@ -111,7 +111,7 @@ async function refreshStickyForMessage(message) {
   }, delay));
 }
 
-async function setSticky(guild, channel, content, scope = 'current', refreshSeconds = 0) {
+async function setSticky(guild, channel, content, scope = 'current', refreshSeconds = 5) {
   const config = getStickySettings(guild.id);
   config.refreshSeconds = Math.max(0, Math.min(300, Number(refreshSeconds) || 0));
   if (scope === 'all') {
@@ -163,7 +163,7 @@ async function performPrefixSticky(message, args) {
   const scope = ['all', '全部', '所有频道'].includes(requestedScope) ? 'all' : 'current';
   if (action === 'set' || action === '设置') {
     if (scope === 'all') args.shift();
-    const refreshSeconds = /^\d+$/.test(args[0] || '') ? Number(args.shift()) : 0;
+    const refreshSeconds = /^\d+$/.test(args[0] || '') ? Number(args.shift()) : 5;
     const content = args.join(' ').trim();
     if (!content) { await message.reply('用法：置底 set [all] [刷新秒数] 置底内容'); return; }
     await setSticky(message.guild, message.channel, content, scope, refreshSeconds);
@@ -1226,7 +1226,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const allChannels = interaction.options.getBoolean('all_channels') || false;
       if (subcommand === 'set') {
         const content = interaction.options.getString('content').trim();
-        const refreshSeconds = interaction.options.getInteger('refresh_seconds') ?? 0;
+        const refreshSeconds = interaction.options.getInteger('refresh_seconds') ?? 5;
         if (!content) { await interaction.reply({ content: '置底内容不能为空。', ephemeral: true }); return; }
         await setSticky(interaction.guild, interaction.channel, content, allChannels ? 'all' : 'current', refreshSeconds);
         await interaction.reply({ content: `已设置${allChannels ? '所有文字频道' : '当前频道'}的置底消息，刷新时间：${refreshSeconds} 秒。`, ephemeral: true });
