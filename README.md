@@ -13,6 +13,7 @@
 - `/moderation` — 设置惩罚日志频道
 - `/serverstats` — 设置服务器统计频道
 - `/announce` — 打开机器人代发公告面板
+- `/sticky` — 设置或取消置底消息
 - `/mute` — 暂时禁言成员
 - `/unmute` — 解除成员禁言
 - `/kick` — 踢出成员
@@ -46,6 +47,26 @@
 - **Embed 面板**：发送不显示管理员身份的 Embed 公告
 
 两种类型都可以选择性填写要回复的消息 ID，以及是否 `@` 原消息作者。回复消息 ID 留空时不会回复任何消息；填写 `true`、`是` 或 `yes` 才会 @ 原消息作者，默认不 @。提交后，Bot 会把公告公开发送到执行 `/announce` 的频道，公开内容不会显示是谁发起发送。
+
+## Sticky 置底消息
+
+管理员可以使用斜杠指令：
+
+```text
+/sticky set content:置底内容 all_channels:true
+/sticky cancel all_channels:true
+```
+
+也可以使用当前服务器在 `/moderation` 中设置的 Prefix：
+
+```text
+!sticky set 置底内容
+!sticky set all 置底内容
+!sticky cancel
+!sticky cancel all
+```
+
+不填写 `all` 或将 `all_channels` 设为 `false` 时，只作用于当前频道；启用全部频道时，Bot 会在服务器文字频道和公告频道各设置一条置底消息。每个频道最多保留一条置底消息，新消息出现后旧置底会被删除并重新发送到最底部。管理员可以取消当前频道或所有频道的置底消息。
 
 ## 消息统计
 

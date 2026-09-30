@@ -57,9 +57,112 @@ if (!settings.giveaways) settings.giveaways = {};
 if (!settings.giveawayMessages) settings.giveawayMessages = {};
 if (!settings.messageStats) settings.messageStats = {};
 if (!settings.giveawayTemplates) settings.giveawayTemplates = {};
+if (!settings.stickies) settings.stickies = {};
 
 function saveSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+}
+
+function getStickySettings(guildId) {
+  if (!settings.stickies[guildId]) settings.stickies[guildId] = { global: '', globalMessages: {}, channels: {} };
+  settings.stickies[guildId].globalMessages ||= {};
+  settings.stickies[guildId].channels ||= {};
+  return settings.stickies[guildId];
+}
+
+const stickyLocks = new Set();
+
+async function deleteStickyMessage(channel, messageId) {
+  if (!messageId || !channel?.messages) return;
+  const oldMessage = await channel.messages.fetch(messageId).catch(() => null);
+  if (oldMessage) await oldMessage.delete().catch(() => {});
+}
+
+async function publishStickyToChannel(guild, channel, content) {
+  if (!channel?.isTextBased?.() || !content) return null;
+  const config = getStickySettings(guild.id);
+  const channelConfig = config.channels[channel.id] || {};
+  const oldMessageId = config.global ? config.globalMessages[channel.id] : channelConfig.messageId;
+  await deleteStickyMessage(channel, oldMessageId);
+  const sent = await channel.send({ content }).catch((error) => { console.error('Could not send sticky message:', error); return null; });
+  if (!sent) return null;
+  if (config.global) config.globalMessages[channel.id] = sent.id;
+  else config.channels[channel.id] = { content, messageId: sent.id };
+  saveSettings();
+  return sent;
+}
+
+async function refreshStickyForMessage(message) {
+  if (!message.guild || message.author.bot || !message.channel?.isTextBased?.()) return;
+  const config = getStickySettings(message.guild.id);
+  const channelConfig = config.channels[message.channel.id];
+  const content = config.global || channelConfig?.content;
+  if (!content || stickyLocks.has(message.channel.id)) return;
+  stickyLocks.add(message.channel.id);
+  try {
+    await publishStickyToChannel(message.guild, message.channel, content);
+  } finally {
+    stickyLocks.delete(message.channel.id);
+  }
+}
+
+async function setSticky(guild, channel, content, scope = 'current') {
+  const config = getStickySettings(guild.id);
+  if (scope === 'all') {
+    config.global = content;
+    config.globalMessages = {};
+    const channels = guild.channels.cache.filter((item) => [ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(item.type));
+    for (const target of channels.values()) await publishStickyToChannel(guild, target, content);
+  } else {
+    for (const [channelId, messageId] of Object.entries(config.globalMessages)) {
+      const target = await guild.channels.fetch(channelId).catch(() => null);
+      await deleteStickyMessage(target, messageId);
+    }
+    config.global = '';
+    config.globalMessages = {};
+    config.channels[channel.id] = { content, messageId: '' };
+    await publishStickyToChannel(guild, channel, content);
+  }
+  saveSettings();
+}
+
+async function cancelSticky(guild, channel, scope = 'current') {
+  const config = getStickySettings(guild.id);
+  if (scope === 'all') {
+    for (const [channelId, messageId] of Object.entries(config.globalMessages)) {
+      const target = await guild.channels.fetch(channelId).catch(() => null);
+      await deleteStickyMessage(target, messageId);
+    }
+    config.global = '';
+    config.globalMessages = {};
+  } else {
+    const channelConfig = config.channels[channel.id];
+    await deleteStickyMessage(channel, channelConfig?.messageId);
+    delete config.channels[channel.id];
+  }
+  saveSettings();
+}
+
+async function performPrefixSticky(message, args) {
+  if (!message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    await message.reply('只有拥有“管理服务器”权限的管理员可以使用置底指令。');
+    return;
+  }
+  const action = (args.shift() || '').toLowerCase();
+  const requestedScope = (args[0] || '').toLowerCase();
+  const scope = ['all', '全部', '所有频道'].includes(requestedScope) ? 'all' : 'current';
+  if (action === 'set' || action === '设置') {
+    if (scope === 'all') args.shift();
+    const content = args.join(' ').trim();
+    if (!content) { await message.reply('用法：置底 set [all] 置底内容'); return; }
+    await setSticky(message.guild, message.channel, content, scope);
+    await message.reply(`已设置${scope === 'all' ? '所有频道' : '当前频道'}的置底消息。`);
+  } else if (action === 'cancel' || action === 'remove' || action === '取消') {
+    await cancelSticky(message.guild, message.channel, scope);
+    await message.reply(`已取消${scope === 'all' ? '所有频道' : '当前频道'}的置底消息。`);
+  } else {
+    await message.reply('用法：置底 set [all] 内容，或置底 cancel [all]。');
+  }
 }
 
 function shanghaiDateKey(date = new Date()) {
@@ -719,6 +822,13 @@ const commands = [
   new SlashCommandBuilder().setName('moderation').setDescription('打开管理员惩罚系统设置。'),
   new SlashCommandBuilder().setName('serverstats').setDescription('打开服务器统计频道设置。'),
   new SlashCommandBuilder().setName('announce').setDescription('打开机器人代发公告面板。'),
+  new SlashCommandBuilder()
+    .setName('sticky').setDescription('设置或取消频道置底消息。')
+    .addSubcommand((subcommand) => subcommand.setName('set').setDescription('设置置底消息。')
+      .addStringOption((option) => option.setName('content').setDescription('置底消息内容。').setRequired(true))
+      .addBooleanOption((option) => option.setName('all_channels').setDescription('是否在每一个文字频道设置。').setRequired(false)))
+    .addSubcommand((subcommand) => subcommand.setName('cancel').setDescription('取消置底消息。')
+      .addBooleanOption((option) => option.setName('all_channels').setDescription('是否取消所有频道的置底。').setRequired(false))),
   new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
   new SlashCommandBuilder()
     .setName('mute').setDescription('暂时禁言一名成员。')
@@ -781,7 +891,11 @@ client.on(Events.MessageCreate, (message) => {
       const reason = parts.join(' ');
       performPrefixModeration(message, action, { target, duration, reason }).catch((error) => console.error('Prefix moderation error:', error));
     }
+    if (['sticky', '置底'].includes(action)) {
+      performPrefixSticky(message, parts).catch((error) => console.error('Prefix sticky error:', error));
+    }
   }
+  refreshStickyForMessage(message).catch((error) => console.error('Sticky refresh error:', error));
   settings.giveawayMessages[message.guild.id] ||= {};
   settings.giveawayMessages[message.guild.id][message.author.id] = (settings.giveawayMessages[message.guild.id][message.author.id] || 0) + 1;
   settings.messageStats[message.guild.id] ||= {};
@@ -1029,7 +1143,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
@@ -1069,6 +1183,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       await interaction.reply({ content: '请选择要发送的公告类型。公开消息不会显示你的身份。', components: announceComponents(), ephemeral: true });
+    } else if (interaction.commandName === 'sticky') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以使用置底功能。', ephemeral: true });
+        return;
+      }
+      const subcommand = interaction.options.getSubcommand();
+      const allChannels = interaction.options.getBoolean('all_channels') || false;
+      if (subcommand === 'set') {
+        const content = interaction.options.getString('content').trim();
+        if (!content) { await interaction.reply({ content: '置底内容不能为空。', ephemeral: true }); return; }
+        await setSticky(interaction.guild, interaction.channel, content, allChannels ? 'all' : 'current');
+        await interaction.reply({ content: `已设置${allChannels ? '所有文字频道' : '当前频道'}的置底消息。`, ephemeral: true });
+      } else {
+        await cancelSticky(interaction.guild, interaction.channel, allChannels ? 'all' : 'current');
+        await interaction.reply({ content: `已取消${allChannels ? '所有文字频道' : '当前频道'}的置底消息。`, ephemeral: true });
+      }
     } else if (interaction.commandName === 'giveaway') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以创建和管理抽奖。', ephemeral: true });
