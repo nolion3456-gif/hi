@@ -64,13 +64,15 @@ function saveSettings() {
 }
 
 function getStickySettings(guildId) {
-  if (!settings.stickies[guildId]) settings.stickies[guildId] = { global: '', globalMessages: {}, channels: {} };
+  if (!settings.stickies[guildId]) settings.stickies[guildId] = { global: '', globalMessages: {}, channels: {}, refreshSeconds: 0 };
   settings.stickies[guildId].globalMessages ||= {};
   settings.stickies[guildId].channels ||= {};
+  if (!Number.isInteger(settings.stickies[guildId].refreshSeconds)) settings.stickies[guildId].refreshSeconds = 0;
   return settings.stickies[guildId];
 }
 
 const stickyLocks = new Set();
+const stickyRefreshTimers = new Map();
 
 async function deleteStickyMessage(channel, messageId) {
   if (!messageId || !channel?.messages) return;
@@ -97,17 +99,21 @@ async function refreshStickyForMessage(message) {
   const config = getStickySettings(message.guild.id);
   const channelConfig = config.channels[message.channel.id];
   const content = config.global || channelConfig?.content;
-  if (!content || stickyLocks.has(message.channel.id)) return;
-  stickyLocks.add(message.channel.id);
-  try {
-    await publishStickyToChannel(message.guild, message.channel, content);
-  } finally {
-    stickyLocks.delete(message.channel.id);
-  }
+  if (!content) return;
+  if (stickyRefreshTimers.has(message.channel.id)) clearTimeout(stickyRefreshTimers.get(message.channel.id));
+  const delay = Math.max(0, Number(config.refreshSeconds || 0)) * 1000;
+  stickyRefreshTimers.set(message.channel.id, setTimeout(async () => {
+    stickyRefreshTimers.delete(message.channel.id);
+    if (stickyLocks.has(message.channel.id)) return;
+    stickyLocks.add(message.channel.id);
+    try { await publishStickyToChannel(message.guild, message.channel, content); }
+    finally { stickyLocks.delete(message.channel.id); }
+  }, delay));
 }
 
-async function setSticky(guild, channel, content, scope = 'current') {
+async function setSticky(guild, channel, content, scope = 'current', refreshSeconds = 0) {
   const config = getStickySettings(guild.id);
+  config.refreshSeconds = Math.max(0, Math.min(300, Number(refreshSeconds) || 0));
   if (scope === 'all') {
     config.global = content;
     config.globalMessages = {};
@@ -129,6 +135,8 @@ async function setSticky(guild, channel, content, scope = 'current') {
 async function cancelSticky(guild, channel, scope = 'current') {
   const config = getStickySettings(guild.id);
   if (scope === 'all') {
+    for (const timer of stickyRefreshTimers.values()) clearTimeout(timer);
+    stickyRefreshTimers.clear();
     for (const [channelId, messageId] of Object.entries(config.globalMessages)) {
       const target = await guild.channels.fetch(channelId).catch(() => null);
       await deleteStickyMessage(target, messageId);
@@ -136,6 +144,8 @@ async function cancelSticky(guild, channel, scope = 'current') {
     config.global = '';
     config.globalMessages = {};
   } else {
+    if (stickyRefreshTimers.has(channel.id)) clearTimeout(stickyRefreshTimers.get(channel.id));
+    stickyRefreshTimers.delete(channel.id);
     const channelConfig = config.channels[channel.id];
     await deleteStickyMessage(channel, channelConfig?.messageId);
     delete config.channels[channel.id];
@@ -153,15 +163,16 @@ async function performPrefixSticky(message, args) {
   const scope = ['all', '全部', '所有频道'].includes(requestedScope) ? 'all' : 'current';
   if (action === 'set' || action === '设置') {
     if (scope === 'all') args.shift();
+    const refreshSeconds = /^\d+$/.test(args[0] || '') ? Number(args.shift()) : 0;
     const content = args.join(' ').trim();
-    if (!content) { await message.reply('用法：置底 set [all] 置底内容'); return; }
-    await setSticky(message.guild, message.channel, content, scope);
-    await message.reply(`已设置${scope === 'all' ? '所有频道' : '当前频道'}的置底消息。`);
+    if (!content) { await message.reply('用法：置底 set [all] [刷新秒数] 置底内容'); return; }
+    await setSticky(message.guild, message.channel, content, scope, refreshSeconds);
+    await message.reply(`已设置${scope === 'all' ? '所有频道' : '当前频道'}的置底消息，刷新时间：${refreshSeconds} 秒。`);
   } else if (action === 'cancel' || action === 'remove' || action === '取消') {
     await cancelSticky(message.guild, message.channel, scope);
     await message.reply(`已取消${scope === 'all' ? '所有频道' : '当前频道'}的置底消息。`);
   } else {
-    await message.reply('用法：置底 set [all] 内容，或置底 cancel [all]。');
+    await message.reply('用法：置底 set [all] [刷新秒数] 内容，或置底 cancel [all]。');
   }
 }
 
@@ -826,7 +837,8 @@ const commands = [
     .setName('sticky').setDescription('设置或取消频道置底消息。')
     .addSubcommand((subcommand) => subcommand.setName('set').setDescription('设置置底消息。')
       .addStringOption((option) => option.setName('content').setDescription('置底消息内容。').setRequired(true))
-      .addBooleanOption((option) => option.setName('all_channels').setDescription('是否在每一个文字频道设置。').setRequired(false)))
+      .addBooleanOption((option) => option.setName('all_channels').setDescription('是否在每一个文字频道设置。').setRequired(false))
+      .addIntegerOption((option) => option.setName('refresh_seconds').setDescription('成员发消息后等待几秒再刷新，0 为立即。').setMinValue(0).setMaxValue(300).setRequired(false)))
     .addSubcommand((subcommand) => subcommand.setName('cancel').setDescription('取消置底消息。')
       .addBooleanOption((option) => option.setName('all_channels').setDescription('是否取消所有频道的置底。').setRequired(false))),
   new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
@@ -1192,9 +1204,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const allChannels = interaction.options.getBoolean('all_channels') || false;
       if (subcommand === 'set') {
         const content = interaction.options.getString('content').trim();
+        const refreshSeconds = interaction.options.getInteger('refresh_seconds') ?? 0;
         if (!content) { await interaction.reply({ content: '置底内容不能为空。', ephemeral: true }); return; }
-        await setSticky(interaction.guild, interaction.channel, content, allChannels ? 'all' : 'current');
-        await interaction.reply({ content: `已设置${allChannels ? '所有文字频道' : '当前频道'}的置底消息。`, ephemeral: true });
+        await setSticky(interaction.guild, interaction.channel, content, allChannels ? 'all' : 'current', refreshSeconds);
+        await interaction.reply({ content: `已设置${allChannels ? '所有文字频道' : '当前频道'}的置底消息，刷新时间：${refreshSeconds} 秒。`, ephemeral: true });
       } else {
         await cancelSticky(interaction.guild, interaction.channel, allChannels ? 'all' : 'current');
         await interaction.reply({ content: `已取消${allChannels ? '所有文字频道' : '当前频道'}的置底消息。`, ephemeral: true });
