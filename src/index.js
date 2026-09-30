@@ -227,6 +227,7 @@ function getGuildSettings(guildId) {
         title: '身份组领取面板',
         description: '点击下方按钮领取或取消对应身份组。',
         roles: [],
+        mode: 'buttons',
       },
       moderationLogChannelId: '',
       moderationPrefix: '!',
@@ -246,8 +247,10 @@ function getGuildSettings(guildId) {
       title: '身份组领取面板',
       description: '点击下方按钮领取或取消对应身份组。',
       roles: [],
+      mode: 'buttons',
     };
   }
+  if (!['buttons', 'select'].includes(settings[guildId].rolePanel.mode)) settings[guildId].rolePanel.mode = 'buttons';
   if (!Object.prototype.hasOwnProperty.call(settings[guildId], 'moderationLogChannelId')) {
     settings[guildId].moderationLogChannelId = '';
   }
@@ -335,7 +338,7 @@ function rolePanelEmbed(guild, roleConfig) {
     .setColor(0xfee75c)
     .setTitle(roleConfig.title)
     .setDescription(`${roleConfig.description}\n\n${roleLines}`)
-    .setFooter({ text: `${guild.name} · 点击按钮领取或取消身份组` });
+    .setFooter({ text: `${guild.name} · ${roleConfig.mode === 'select' ? '使用下拉选单领取或取消身份组' : '点击按钮领取或取消身份组'}` });
 }
 
 function rolePanelButtons(roleConfig) {
@@ -352,6 +355,24 @@ function rolePanelButtons(roleConfig) {
   return rows;
 }
 
+function rolePanelSelect(roleConfig) {
+  if (!roleConfig.roles.length) return [];
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId('role_select')
+    .setPlaceholder('选择身份组以领取或取消')
+    .setMinValues(1)
+    .setMaxValues(Math.min(roleConfig.roles.length, 25))
+    .addOptions(roleConfig.roles.slice(0, 25).map((item) => new StringSelectMenuOptionBuilder()
+      .setLabel(item.label.slice(0, 100))
+      .setValue(item.roleId)
+      .setDescription('点击领取或取消这个身份组')));
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
+function rolePanelPublicComponents(roleConfig) {
+  return roleConfig.mode === 'select' ? rolePanelSelect(roleConfig) : rolePanelButtons(roleConfig);
+}
+
 function roleConfigComponents(roleConfig) {
   return [
     new ActionRowBuilder().addComponents(
@@ -359,9 +380,10 @@ function roleConfigComponents(roleConfig) {
       new ButtonBuilder().setCustomId('role_description').setLabel('设置面板文字').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('role_add').setLabel('添加身份组').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('role_remove').setLabel('移除身份组').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('role_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('role_mode').setLabel(roleConfig.mode === 'select' ? '切换为按钮模式' : '切换为下拉选单').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('role_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('role_publish').setLabel('发布到当前频道').setStyle(ButtonStyle.Success),
     ),
   ];
@@ -1475,10 +1497,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setMinValues(1)
         .setMaxValues(25);
       await interaction.reply({ content: '请选择要移除的身份组，可多选；不会删除服务器身份组。', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+    } else if (interaction.customId === 'role_mode') {
+      config.rolePanel.mode = config.rolePanel.mode === 'select' ? 'buttons' : 'select';
+      saveSettings();
+      await interaction.update({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: roleConfigComponents(config.rolePanel) });
     } else if (interaction.customId === 'role_refresh') {
       await interaction.update({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: roleConfigComponents(config.rolePanel) });
     } else if (interaction.customId === 'role_publish') {
-      const message = await interaction.channel.send({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: rolePanelButtons(config.rolePanel) });
+      const message = await interaction.channel.send({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: rolePanelPublicComponents(config.rolePanel) });
       await interaction.reply({ content: `身份组面板已发布：[点击查看](https://discord.com/channels/${interaction.guild.id}/${message.channel.id}/${message.id})`, ephemeral: true });
     } else if (interaction.customId === 'welcome_channel' || interaction.customId === 'leave_channel') {
       const type = interaction.customId === 'welcome_channel' ? 'welcome' : 'leave';
@@ -1558,6 +1584,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     await interaction.showModal(textModal(`role_label_modal:${roleId}`, '设置身份组按钮文字', '按钮名称（留空使用身份组名称）', role.name, false));
+    return;
+  }
+
+  if (interaction.isStringSelectMenu() && interaction.customId === 'role_select') {
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member) { await interaction.reply({ content: '找不到你的服务器成员资料。', ephemeral: true }); return; }
+    const roleConfig = getGuildSettings(interaction.guild.id).rolePanel;
+    const configuredRoles = new Map(roleConfig.roles.map((item) => [item.roleId, item]));
+    const results = [];
+    for (const roleId of interaction.values) {
+      if (!configuredRoles.has(roleId)) continue;
+      const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+      if (!role || role.managed || role.position >= interaction.guild.members.me.roles.highest.position) {
+        results.push(`无法管理 <@&${roleId}>`);
+        continue;
+      }
+      try {
+        if (member.roles.cache.has(roleId)) {
+          await member.roles.remove(role);
+          results.push(`已移除 ${role.name}`);
+        } else {
+          await member.roles.add(role);
+          results.push(`已领取 ${role.name}`);
+        }
+      } catch (error) {
+        console.error('Could not toggle select role:', error);
+        results.push(`${role.name} 操作失败`);
+      }
+    }
+    await interaction.reply({ content: results.length ? results.join('\n') : '没有找到可操作的身份组。', ephemeral: true });
     return;
   }
 
