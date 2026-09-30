@@ -631,6 +631,84 @@ function textModal(customId, title, label, value, paragraph = false) {
     .addComponents(new ActionRowBuilder().addComponents(input));
 }
 
+function announceComponents() {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('announce_text').setLabel('普通文字').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('announce_embed').setLabel('Embed 面板').setStyle(ButtonStyle.Secondary),
+  )];
+}
+
+function announceModal(type) {
+  const fields = type === 'embed'
+    ? [
+        ['title', 'Embed 标题', TextInputStyle.Short, true, '公告标题'],
+        ['description', 'Embed 内容', TextInputStyle.Paragraph, true, '要公开发送的内容'],
+        ['color', '颜色（可选）', TextInputStyle.Short, false, '例如：5865F2 或 #5865F2'],
+        ['reply_id', '回复消息 ID（可选）', TextInputStyle.Short, false, '不回复任何消息就留空'],
+        ['mention', '是否 @ 原消息作者', TextInputStyle.Short, false, '填写 true / false，默认 false'],
+      ]
+    : [
+        ['content', '要发送的文字', TextInputStyle.Paragraph, true, '要公开发送的内容'],
+        ['reply_id', '回复消息 ID（可选）', TextInputStyle.Short, false, '不回复任何消息就留空'],
+        ['mention', '是否 @ 原消息作者', TextInputStyle.Short, false, '填写 true / false，默认 false'],
+      ];
+  return new ModalBuilder().setCustomId(`announce_modal:${type}`).setTitle(type === 'embed' ? '发送 Embed 公告' : '发送文字公告').addComponents(
+    ...fields.map(([id, label, style, required, placeholder]) => new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required).setPlaceholder(placeholder).setMaxLength(id === 'description' || id === 'content' ? 4000 : 100),
+    )),
+  );
+}
+
+function parseAnnounceColor(value) {
+  if (!value) return 0x5865f2;
+  const normalized = value.trim().replace(/^#/, '');
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return null;
+  return Number.parseInt(normalized, 16);
+}
+
+async function publishAnnouncement(interaction, type) {
+  const replyId = interaction.fields.getTextInputValue('reply_id').trim();
+  const mentionValue = interaction.fields.getTextInputValue('mention').trim().toLowerCase();
+  const mention = ['true', 'yes', 'y', '是', '要', '1'].includes(mentionValue);
+  let referenceMessage = null;
+  if (replyId) {
+    if (!/^\d{15,25}$/.test(replyId)) {
+      await interaction.reply({ content: '消息 ID 格式无效；请填写 15 至 25 位 Discord 消息 ID，或留空。', ephemeral: true });
+      return;
+    }
+    referenceMessage = await interaction.channel.messages.fetch(replyId).catch(() => null);
+    if (!referenceMessage) {
+      await interaction.reply({ content: '找不到这个频道中的消息，公告没有发送。', ephemeral: true });
+      return;
+    }
+  }
+  const payload = { allowedMentions: { repliedUser: Boolean(referenceMessage && mention) } };
+  if (type === 'embed') {
+    const color = parseAnnounceColor(interaction.fields.getTextInputValue('color'));
+    if (color === null) {
+      await interaction.reply({ content: '颜色格式无效，请填写 6 位十六进制颜色，例如 `5865F2`。', ephemeral: true });
+      return;
+    }
+    payload.embeds = [new EmbedBuilder()
+      .setTitle(interaction.fields.getTextInputValue('title').trim())
+      .setDescription(interaction.fields.getTextInputValue('description').trim())
+      .setColor(color)];
+  } else {
+    payload.content = interaction.fields.getTextInputValue('content').trim();
+  }
+  if (referenceMessage) payload.reply = { messageReference: referenceMessage.id, failIfNotExists: false };
+  try {
+    await interaction.reply({ content: '私密设置已确认，公告发送成功处理中；接下来会公开发布到当前频道。', ephemeral: true });
+    const sent = await interaction.channel.send(payload);
+    await interaction.editReply({ content: `公告已发送成功。${referenceMessage ? `已回复消息 ID：\`${referenceMessage.id}\`。` : ''}` });
+    return sent;
+  } catch (error) {
+    console.error('Could not publish announcement:', error);
+    await interaction.editReply({ content: '公告发送失败，请检查 Bot 是否拥有发送消息、嵌入链接和查看频道权限。' }).catch(() => {});
+    return null;
+  }
+}
+
 const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('检查机器人是否在线。'),
   new SlashCommandBuilder().setName('help').setDescription('查看可用指令。'),
@@ -640,6 +718,7 @@ const commands = [
   new SlashCommandBuilder().setName('roles').setDescription('打开身份组面板设置。'),
   new SlashCommandBuilder().setName('moderation').setDescription('打开管理员惩罚系统设置。'),
   new SlashCommandBuilder().setName('serverstats').setDescription('打开服务器统计频道设置。'),
+  new SlashCommandBuilder().setName('announce').setDescription('打开机器人代发公告面板。'),
   new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
   new SlashCommandBuilder()
     .setName('mute').setDescription('暂时禁言一名成员。')
@@ -950,7 +1029,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
@@ -984,6 +1063,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats), ephemeral: true });
+    } else if (interaction.commandName === 'announce') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以使用公告代发功能。', ephemeral: true });
+        return;
+      }
+      await interaction.reply({ content: '请选择要发送的公告类型。公开消息不会显示你的身份。', components: announceComponents(), ephemeral: true });
     } else if (interaction.commandName === 'giveaway') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以创建和管理抽奖。', ephemeral: true });
@@ -1071,6 +1156,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     saveSettings();
     const message = await interaction.channel.messages.fetch(giveaway.messageId).catch(() => null);
     if (message) await message.edit({ embeds: [giveawayEmbed(giveaway)], components: giveawayButtons(giveaway) }).catch(console.error);
+    return;
+  }
+
+  if (interaction.isButton() && (interaction.customId === 'announce_text' || interaction.customId === 'announce_embed')) {
+    if (!(await canManage(interaction))) {
+      await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以使用公告代发功能。', ephemeral: true });
+      return;
+    }
+    await interaction.showModal(announceModal(interaction.customId === 'announce_embed' ? 'embed' : 'text'));
     return;
   }
 
@@ -1338,6 +1432,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isModalSubmit()) {
+    if (interaction.customId === 'announce_modal:text' || interaction.customId === 'announce_modal:embed') {
+      await publishAnnouncement(interaction, interaction.customId.endsWith(':embed') ? 'embed' : 'text');
+      return;
+    }
     if (interaction.customId === 'serverstats_modal') {
       const stats = config.serverStats;
       stats.totalName = interaction.fields.getTextInputValue('total_name').trim() || '👥 成员：{count}';
