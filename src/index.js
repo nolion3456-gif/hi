@@ -431,19 +431,21 @@ function serverStatsEmbed(guild, config) {
 }
 
 function serverStatsComponents(stats) {
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('serverstats_setup').setLabel('设置频道名称').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('serverstats_update').setLabel('立即更新').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('serverstats_toggle').setLabel(stats.enabled ? '关闭统计' : '开启统计').setStyle(stats.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('serverstats_total').setLabel(stats.showTotal ? '关闭总人数' : '开启总人数').setStyle(stats.showTotal ? ButtonStyle.Danger : ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('serverstats_humans').setLabel(stats.showHumans ? '关闭真人数' : '开启真人数').setStyle(stats.showHumans ? ButtonStyle.Danger : ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('serverstats_online').setLabel(stats.showOnline ? '关闭在线人数' : '开启在线人数').setStyle(stats.showOnline ? ButtonStyle.Danger : ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('serverstats_bots').setLabel(stats.showBots ? '关闭机器人数' : '开启机器人数').setStyle(stats.showBots ? ButtonStyle.Danger : ButtonStyle.Success),
-    ),
-  ];
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId('serverstats_menu')
+    .setPlaceholder('选择服务器统计操作')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      { label: '设置频道名称', value: 'setup', description: '自定义四种统计频道名称和表情符号' },
+      { label: `${stats.showTotal ? '关闭' : '开启'}总人数`, value: 'total', description: '显示服务器真人与机器人总人数' },
+      { label: `${stats.showHumans ? '关闭' : '开启'}真人成员`, value: 'humans', description: '显示排除机器人的成员数量' },
+      { label: `${stats.showOnline ? '关闭' : '开启'}在线人数`, value: 'online', description: '显示当前在线人数' },
+      { label: `${stats.showBots ? '关闭' : '开启'}机器人数量`, value: 'bots', description: '显示服务器中的机器人数量' },
+      { label: '立即更新统计', value: 'update', description: '重新计算并更新统计频道' },
+      { label: stats.enabled ? '关闭统计系统' : '开启统计系统', value: 'toggle', description: '开启或关闭自动统计' },
+    );
+  return [new ActionRowBuilder().addComponents(menu)];
 }
 
 function serverStatsModal(stats) {
@@ -1513,8 +1515,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.showModal(serverStatsModal(config.serverStats));
     } else if (interaction.customId === 'serverstats_update') {
       config.serverStats.enabled = true;
+      await interaction.deferUpdate();
       await updateServerStats(interaction.guild);
-      await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
     } else if (['serverstats_total', 'serverstats_humans', 'serverstats_online', 'serverstats_bots'].includes(interaction.customId)) {
       const key = {
         serverstats_total: 'showTotal',
@@ -1524,13 +1527,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }[interaction.customId];
       config.serverStats[key] = !config.serverStats[key];
       config.serverStats.enabled = true;
+      await interaction.deferUpdate();
       await updateServerStats(interaction.guild);
-      await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
     } else if (interaction.customId === 'serverstats_toggle') {
       config.serverStats.enabled = !config.serverStats.enabled;
       saveSettings();
-      if (config.serverStats.enabled) await updateServerStats(interaction.guild);
-      await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      if (config.serverStats.enabled) {
+        await interaction.deferUpdate();
+        await updateServerStats(interaction.guild);
+        await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      } else {
+        await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      }
     } else if (interaction.customId === 'moderation_log_channel') {
       const menu = new ChannelSelectMenuBuilder()
         .setCustomId('moderation_log_channel_select')
@@ -1681,6 +1690,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.isStringSelectMenu() && interaction.customId === 'serverstats_menu') {
+    const action = interaction.values[0];
+    if (action === 'setup') {
+      await interaction.showModal(serverStatsModal(config.serverStats));
+      return;
+    }
+    if (action === 'toggle') {
+      config.serverStats.enabled = !config.serverStats.enabled;
+      if (config.serverStats.enabled) {
+        await interaction.deferUpdate();
+        await updateServerStats(interaction.guild);
+        await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      } else {
+        saveSettings();
+        await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      }
+      return;
+    }
+    if (['total', 'humans', 'online', 'bots'].includes(action)) {
+      const key = { total: 'showTotal', humans: 'showHumans', online: 'showOnline', bots: 'showBots' }[action];
+      config.serverStats[key] = !config.serverStats[key];
+      config.serverStats.enabled = true;
+      await interaction.deferUpdate();
+      await updateServerStats(interaction.guild);
+      await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      return;
+    }
+    if (action === 'update') {
+      config.serverStats.enabled = true;
+      await interaction.deferUpdate();
+      await updateServerStats(interaction.guild);
+      await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+      return;
+    }
+  }
+
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('giveaway_template_select:')) {
     const template = settings.giveawayTemplates[interaction.values[0]];
     if (!template) { await interaction.reply({ content: '找不到这个模板。', ephemeral: true }); return; }
@@ -1706,8 +1751,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       stats.onlineName = interaction.fields.getTextInputValue('online_name').trim() || '🟢 在线：{count}';
       stats.botName = interaction.fields.getTextInputValue('bot_name').trim() || '🤖 机器人：{count}';
       stats.enabled = true;
+      await interaction.deferReply({ ephemeral: true });
       await updateServerStats(interaction.guild);
-      await interaction.reply({ content: '服务器统计频道已开启并更新。频道名称支持 `{count}` 和表情符号。', ephemeral: true });
+      await interaction.editReply({ content: '服务器统计频道已开启并更新。频道名称支持 `{count}` 和表情符号。统计类别和频道均已设置为成员不可加入。' });
       return;
     }
     if (interaction.customId === 'moderation_prefix_modal') {
