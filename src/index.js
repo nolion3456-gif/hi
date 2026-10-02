@@ -86,7 +86,10 @@ async function publishStickyToChannel(guild, channel, content) {
   const channelConfig = config.channels[channel.id] || {};
   const oldMessageId = config.global ? config.globalMessages[channel.id] : channelConfig.messageId;
   await deleteStickyMessage(channel, oldMessageId);
-  const sent = await channel.send({ content: `这是一条stick内容\n${content}` }).catch((error) => { console.error('Could not send sticky message:', error); return null; });
+  const sent = await channel.send({
+    content: `这是一条stick内容\n${content}`,
+    allowedMentions: { parse: ['users', 'roles', 'everyone'] },
+  }).catch((error) => { console.error('Could not send sticky message:', error); return null; });
   if (!sent) return null;
   if (config.global) config.globalMessages[channel.id] = sent.id;
   else config.channels[channel.id] = { content, messageId: sent.id };
@@ -818,7 +821,12 @@ async function publishAnnouncement(interaction, type) {
       return;
     }
   }
-  const payload = { allowedMentions: { repliedUser: Boolean(referenceMessage && mention) } };
+  const payload = {
+    allowedMentions: {
+      parse: ['users', 'roles', 'everyone'],
+      repliedUser: Boolean(referenceMessage && mention),
+    },
+  };
   if (type === 'embed') {
     const color = parseAnnounceColor(interaction.fields.getTextInputValue('color'));
     if (color === null) {
