@@ -263,14 +263,22 @@ function getGuildSettings(guildId) {
   if (!settings[guildId].serverStats) settings[guildId].serverStats = {};
   settings[guildId].serverStats = {
     enabled: false,
+    categoryId: '',
+    showTotal: true,
+    showHumans: true,
+    showOnline: true,
+    showBots: true,
     totalChannelId: '',
+    humanChannelId: '',
     onlineChannelId: '',
     botChannelId: '',
-    totalName: '👥 成员：{count}',
+    totalName: '👥 总人数：{count}',
+    humanName: '👤 真人：{count}',
     onlineName: '🟢 在线：{count}',
     botName: '🤖 机器人：{count}',
     ...settings[guildId].serverStats,
   };
+  if (settings[guildId].serverStats.totalName === '👥 成员：{count}') settings[guildId].serverStats.totalName = '👥 总人数：{count}';
   return settings[guildId];
 }
 
@@ -413,25 +421,35 @@ function serverStatsEmbed(guild, config) {
   return new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle('服务器统计设置')
-    .setDescription(`状态：${stats.enabled ? '开启' : '关闭'}\n\n` +
-      `成员统计：${stats.totalChannelId ? `<#${stats.totalChannelId}>` : '尚未创建'} · 名称：\`${stats.totalName}\`\n` +
-      `在线统计：${stats.onlineChannelId ? `<#${stats.onlineChannelId}>` : '尚未创建'} · 名称：\`${stats.onlineName}\`\n` +
-      `机器人统计：${stats.botChannelId ? `<#${stats.botChannelId}>` : '尚未创建'} · 名称：\`${stats.botName}\`\n\n` +
-      '支持变量：`{count}`。频道名称可以自由加入表情符号。')
+    .setDescription(`状态：${stats.enabled ? '开启' : '关闭'}\n统计类别：${stats.categoryId ? `<#${stats.categoryId}>` : '尚未创建'}\n\n` +
+      `总人数：${stats.showTotal ? (stats.totalChannelId ? `<#${stats.totalChannelId}>` : '待创建') : '已关闭'}\n` +
+      `真人成员：${stats.showHumans ? (stats.humanChannelId ? `<#${stats.humanChannelId}>` : '待创建') : '已关闭'}\n` +
+      `在线人数：${stats.showOnline ? (stats.onlineChannelId ? `<#${stats.onlineChannelId}>` : '待创建') : '已关闭'}\n` +
+      `机器人数量：${stats.showBots ? (stats.botChannelId ? `<#${stats.botChannelId}>` : '待创建') : '已关闭'}\n\n` +
+      '支持变量：`{count}`。频道名称可以自由加入表情符号；统计语音频道禁止成员加入连接。')
     .setFooter({ text: `${guild.name} · 统计频道会自动更新` });
 }
 
 function serverStatsComponents(stats) {
-  return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('serverstats_setup').setLabel('设置频道名称').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('serverstats_update').setLabel('立即更新').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('serverstats_toggle').setLabel(stats.enabled ? '关闭统计' : '开启统计').setStyle(stats.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
-  )];
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('serverstats_setup').setLabel('设置频道名称').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('serverstats_update').setLabel('立即更新').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('serverstats_toggle').setLabel(stats.enabled ? '关闭统计' : '开启统计').setStyle(stats.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('serverstats_total').setLabel(stats.showTotal ? '关闭总人数' : '开启总人数').setStyle(stats.showTotal ? ButtonStyle.Danger : ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('serverstats_humans').setLabel(stats.showHumans ? '关闭真人数' : '开启真人数').setStyle(stats.showHumans ? ButtonStyle.Danger : ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('serverstats_online').setLabel(stats.showOnline ? '关闭在线人数' : '开启在线人数').setStyle(stats.showOnline ? ButtonStyle.Danger : ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('serverstats_bots').setLabel(stats.showBots ? '关闭机器人数' : '开启机器人数').setStyle(stats.showBots ? ButtonStyle.Danger : ButtonStyle.Success),
+    ),
+  ];
 }
 
 function serverStatsModal(stats) {
   const fields = [
-    ['total_name', '成员统计频道名称', stats.totalName, '例如：👥 成员：{count}'],
+    ['total_name', '总人数频道名称', stats.totalName, '例如：👥 总人数：{count}'],
+    ['human_name', '真人成员频道名称', stats.humanName, '例如：👤 真人：{count}'],
     ['online_name', '在线统计频道名称', stats.onlineName, '例如：🟢 在线：{count}'],
     ['bot_name', '机器人统计频道名称', stats.botName, '例如：🤖 机器人：{count}'],
   ];
@@ -446,23 +464,50 @@ async function updateServerStats(guild) {
   if (!stats.enabled) return;
   await guild.members.fetch().catch(() => null);
   const members = guild.members.cache;
+  let category = stats.categoryId ? await guild.channels.fetch(stats.categoryId).catch(() => null) : null;
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    category = await guild.channels.create({
+      name: '服务器统计',
+      type: ChannelType.GuildCategory,
+      permissionOverwrites: [{ id: guild.id, deny: [PermissionFlagsBits.Connect] }],
+      reason: '创建服务器统计类别',
+    }).catch((error) => { console.error('Could not create stats category:', error); return null; });
+    if (!category) return;
+    stats.categoryId = category.id;
+  }
+  await category.permissionOverwrites.edit(guild.id, { Connect: false }).catch(() => {});
   const values = {
     total: members.size || guild.memberCount,
+    humans: members.filter((member) => !member.user.bot).size,
     online: members.filter((member) => member.presence && member.presence.status !== 'offline').size,
     bots: members.filter((member) => member.user.bot).size,
   };
   const definitions = [
-    ['totalChannelId', 'totalName', values.total],
-    ['onlineChannelId', 'onlineName', values.online],
-    ['botChannelId', 'botName', values.bots],
+    ['totalChannelId', 'totalName', 'showTotal', values.total],
+    ['humanChannelId', 'humanName', 'showHumans', values.humans],
+    ['onlineChannelId', 'onlineName', 'showOnline', values.online],
+    ['botChannelId', 'botName', 'showBots', values.bots],
   ];
-  for (const [channelKey, nameKey, count] of definitions) {
+  for (const [channelKey, nameKey, showKey, count] of definitions) {
     let channel = stats[channelKey] ? await guild.channels.fetch(stats[channelKey]).catch(() => null) : null;
+    if (!stats[showKey]) {
+      if (channel) await channel.delete('关闭服务器统计项目').catch(() => {});
+      stats[channelKey] = '';
+      continue;
+    }
     if (!channel) {
-      channel = await guild.channels.create({ name: stats[nameKey].replaceAll('{count}', String(count)), type: ChannelType.GuildVoice, reason: '创建服务器统计频道' }).catch((error) => { console.error('Could not create stats channel:', error); return null; });
+      channel = await guild.channels.create({
+        name: stats[nameKey].replaceAll('{count}', String(count)).slice(0, 100),
+        type: ChannelType.GuildVoice,
+        parent: category.id,
+        permissionOverwrites: [{ id: guild.id, deny: [PermissionFlagsBits.Connect] }],
+        reason: '创建服务器统计频道',
+      }).catch((error) => { console.error('Could not create stats channel:', error); return null; });
       if (!channel) continue;
       stats[channelKey] = channel.id;
     }
+    if (channel.parentId !== category.id) await channel.setParent(category.id).catch(() => {});
+    await channel.permissionOverwrites.edit(guild.id, { Connect: false }).catch(() => {});
     await channel.setName(stats[nameKey].replaceAll('{count}', String(count)).slice(0, 100)).catch(console.error);
   }
   saveSettings();
@@ -1470,6 +1515,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       config.serverStats.enabled = true;
       await updateServerStats(interaction.guild);
       await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+    } else if (['serverstats_total', 'serverstats_humans', 'serverstats_online', 'serverstats_bots'].includes(interaction.customId)) {
+      const key = {
+        serverstats_total: 'showTotal',
+        serverstats_humans: 'showHumans',
+        serverstats_online: 'showOnline',
+        serverstats_bots: 'showBots',
+      }[interaction.customId];
+      config.serverStats[key] = !config.serverStats[key];
+      config.serverStats.enabled = true;
+      await updateServerStats(interaction.guild);
+      await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
     } else if (interaction.customId === 'serverstats_toggle') {
       config.serverStats.enabled = !config.serverStats.enabled;
       saveSettings();
@@ -1645,7 +1701,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.customId === 'serverstats_modal') {
       const stats = config.serverStats;
-      stats.totalName = interaction.fields.getTextInputValue('total_name').trim() || '👥 成员：{count}';
+      stats.totalName = interaction.fields.getTextInputValue('total_name').trim() || '👥 总人数：{count}';
+      stats.humanName = interaction.fields.getTextInputValue('human_name').trim() || '👤 真人：{count}';
       stats.onlineName = interaction.fields.getTextInputValue('online_name').trim() || '🟢 在线：{count}';
       stats.botName = interaction.fields.getTextInputValue('bot_name').trim() || '🤖 机器人：{count}';
       stats.enabled = true;
