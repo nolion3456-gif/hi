@@ -433,19 +433,23 @@ function serverStatsEmbed(guild, config) {
 function serverStatsComponents(stats) {
   const menu = new StringSelectMenuBuilder()
     .setCustomId('serverstats_menu')
-    .setPlaceholder('选择服务器统计操作')
+    .setPlaceholder('选择要显示的统计项目（可多选）')
     .setMinValues(1)
-    .setMaxValues(1)
+    .setMaxValues(4)
     .addOptions(
-      { label: '设置频道名称', value: 'setup', description: '自定义四种统计频道名称和表情符号' },
-      { label: `${stats.showTotal ? '关闭' : '开启'}总人数`, value: 'total', description: '显示服务器真人与机器人总人数' },
-      { label: `${stats.showHumans ? '关闭' : '开启'}真人成员`, value: 'humans', description: '显示排除机器人的成员数量' },
-      { label: `${stats.showOnline ? '关闭' : '开启'}在线人数`, value: 'online', description: '显示当前在线人数' },
-      { label: `${stats.showBots ? '关闭' : '开启'}机器人数量`, value: 'bots', description: '显示服务器中的机器人数量' },
-      { label: '立即更新统计', value: 'update', description: '重新计算并更新统计频道' },
-      { label: stats.enabled ? '关闭统计系统' : '开启统计系统', value: 'toggle', description: '开启或关闭自动统计' },
+      { label: '总人数', value: 'total', description: '显示服务器真人与机器人总人数', default: stats.showTotal },
+      { label: '真人成员', value: 'humans', description: '显示排除机器人的成员数量', default: stats.showHumans },
+      { label: '在线人数', value: 'online', description: '显示当前在线人数', default: stats.showOnline },
+      { label: '机器人数量', value: 'bots', description: '显示服务器中的机器人数量', default: stats.showBots },
     );
-  return [new ActionRowBuilder().addComponents(menu)];
+  return [
+    new ActionRowBuilder().addComponents(menu),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('serverstats_setup').setLabel('设置频道名称').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('serverstats_update').setLabel('刷新').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('serverstats_toggle').setLabel(stats.enabled ? '关闭统计' : '开启统计').setStyle(stats.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+    ),
+  ];
 }
 
 function serverStatsModal(stats) {
@@ -1691,39 +1695,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isStringSelectMenu() && interaction.customId === 'serverstats_menu') {
-    const action = interaction.values[0];
-    if (action === 'setup') {
-      await interaction.showModal(serverStatsModal(config.serverStats));
-      return;
-    }
-    if (action === 'toggle') {
-      config.serverStats.enabled = !config.serverStats.enabled;
-      if (config.serverStats.enabled) {
-        await interaction.deferUpdate();
-        await updateServerStats(interaction.guild);
-        await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
-      } else {
-        saveSettings();
-        await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
-      }
-      return;
-    }
-    if (['total', 'humans', 'online', 'bots'].includes(action)) {
-      const key = { total: 'showTotal', humans: 'showHumans', online: 'showOnline', bots: 'showBots' }[action];
-      config.serverStats[key] = !config.serverStats[key];
-      config.serverStats.enabled = true;
-      await interaction.deferUpdate();
-      await updateServerStats(interaction.guild);
-      await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
-      return;
-    }
-    if (action === 'update') {
-      config.serverStats.enabled = true;
-      await interaction.deferUpdate();
-      await updateServerStats(interaction.guild);
-      await interaction.editReply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
-      return;
-    }
+    const selected = new Set(interaction.values);
+    config.serverStats.showTotal = selected.has('total');
+    config.serverStats.showHumans = selected.has('humans');
+    config.serverStats.showOnline = selected.has('online');
+    config.serverStats.showBots = selected.has('bots');
+    saveSettings();
+    await interaction.update({ content: '已保存要显示的统计项目。点击“刷新”后更新频道；“开启/关闭统计”按钮控制系统状态。', embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
+    return;
   }
 
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('giveaway_template_select:')) {
