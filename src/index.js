@@ -955,7 +955,7 @@ function partnerPublicComponents() {
 function partnerReviewEmbed(app, status = '待审核') {
   return new EmbedBuilder().setColor(status === '待审核' ? 0xfee75c : 0x57f287).setTitle(`合作申请：${app.serverName}`).setDescription(app.promotion)
     .addFields(
-      { name: '服务器数量', value: app.serverCount, inline: true },
+      { name: '服务器人数', value: app.serverMemberCount || app.serverCount || '未填写', inline: true },
       { name: '合作代表', value: `<@${app.representativeId}>`, inline: true },
       { name: '状态', value: status, inline: true },
     ).setFooter({ text: `申请 ID：${app.id}` }).setTimestamp(new Date(app.createdAt));
@@ -974,7 +974,7 @@ function partnerReviewComponents(appId) {
 function partnerApplyModal() {
   return new ModalBuilder().setCustomId('partner_apply_modal').setTitle('申请 Discord 服务器合作').addComponents(
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('server_name').setLabel('服务器名称').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('server_count').setLabel('服务器数量').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50).setPlaceholder('例如：1 个服务器')),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('server_member_count').setLabel('服务器人数').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50).setPlaceholder('例如：500 人')),
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('promotion').setLabel('宣传文＆链接（同一个填写框）').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(4000)),
   );
 }
@@ -1020,7 +1020,18 @@ async function completePartnerAction(interaction, app, action) {
       { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
     ], reason: '创建合作工单' });
     settings.partnerTickets[channel.id] = { channelId: channel.id, guildId: guild.id, appId: app.id, representativeId: app.representativeId, closed: false };
-    await channel.send({ embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle(`合作工单：${app.serverName}`).setDescription(`${app.promotion}\n\n合作代表：${representative}`)], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_close:${channel.id}`).setLabel('关单').setStyle(ButtonStyle.Danger))] });
+    const ticketEmbed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle(`合作工单：${app.serverName}`)
+      .addFields(
+        { name: '服务器名称', value: app.serverName || '未填写', inline: true },
+        { name: '服务器人数', value: app.serverMemberCount || app.serverCount || '未填写', inline: true },
+        { name: '合作代表', value: representative, inline: true },
+        { name: '宣传文＆链接', value: app.promotion || '未填写', inline: false },
+      )
+      .setFooter({ text: `申请 ID：${app.id}` })
+      .setTimestamp(new Date(app.createdAt));
+    await channel.send({ embeds: [ticketEmbed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_close:${channel.id}`).setLabel('关单').setStyle(ButtonStyle.Danger))] });
     saveSettings();
     result = `已创建合作工单 ${channel}。`;
   }
@@ -1616,7 +1627,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const app = {
       id: partnerId(), guildId: interaction.guild.id, representativeId: interaction.user.id,
       serverName: interaction.fields.getTextInputValue('server_name').trim(),
-      serverCount: interaction.fields.getTextInputValue('server_count').trim(),
+      serverMemberCount: interaction.fields.getTextInputValue('server_member_count').trim(),
       promotion: interaction.fields.getTextInputValue('promotion').trim(), status: 'pending', createdAt: Date.now(), reviewMessageId: '',
     };
     settings.partnerApplications[app.id] = app;
