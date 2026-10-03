@@ -1404,6 +1404,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置合作系统。', ephemeral: true });
         return;
       }
+      const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [partnerAdminEmbed(interaction.guild, config)], components: partnerAdminComponents(), ephemeral: true });
     } else if (interaction.commandName === 'announce') {
       if (!(await canManage(interaction))) {
