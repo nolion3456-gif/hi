@@ -58,6 +58,9 @@ if (!settings.giveawayMessages) settings.giveawayMessages = {};
 if (!settings.messageStats) settings.messageStats = {};
 if (!settings.giveawayTemplates) settings.giveawayTemplates = {};
 if (!settings.stickies) settings.stickies = {};
+if (!settings.partnerships) settings.partnerships = {};
+if (!settings.partnerApplications) settings.partnerApplications = {};
+if (!settings.partnerTickets) settings.partnerTickets = {};
 
 function saveSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
@@ -277,6 +280,15 @@ function getGuildSettings(guildId) {
     onlineName: '🟢 在线：{count}',
     botName: '🤖 机器人：{count}',
     ...settings[guildId].serverStats,
+  };
+  if (!settings[guildId].partnership) settings[guildId].partnership = {};
+  settings[guildId].partnership = {
+    reviewChannelId: '',
+    forumChannelId: '',
+    textChannelId: '',
+    partnerCategoryId: '',
+    ticketCategoryId: '',
+    ...settings[guildId].partnership,
   };
   if (settings[guildId].serverStats.totalName === '👥 成员：{count}') settings[guildId].serverStats.totalName = '👥 总人数：{count}';
   return settings[guildId];
@@ -904,6 +916,122 @@ async function publishAnnouncement(interaction, type) {
   }
 }
 
+function partnerId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function partnerAdminEmbed(guild, config) {
+  const p = config.partnership;
+  return new EmbedBuilder().setColor(0x5865f2).setTitle('合作系统设置').setDescription(
+    `审核频道：${p.reviewChannelId ? `<#${p.reviewChannelId}>` : '未设置'}\n` +
+    `贴文频道：${p.forumChannelId ? `<#${p.forumChannelId}>` : '未设置'}\n` +
+    `文字频道：${p.textChannelId ? `<#${p.textChannelId}>` : '未设置'}\n` +
+    `合作频道类别：${p.partnerCategoryId ? `<#${p.partnerCategoryId}>` : '未设置'}\n` +
+    `工单类别：${p.ticketCategoryId ? `<#${p.ticketCategoryId}>` : '未设置'}\n\n` +
+    '设置审核目标后，点击“发布合作面板”让其他服务器代表提交资料。',
+  ).setFooter({ text: `${guild.name} · 合作申请由管理员审核` });
+}
+
+function partnerAdminComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('partner_review_channel').setLabel('审核频道').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('partner_forum_channel').setLabel('贴文频道').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('partner_text_channel').setLabel('文字频道').setStyle(ButtonStyle.Primary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('partner_category').setLabel('合作频道类别').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('partner_ticket_category').setLabel('工单类别').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('partner_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('partner_publish').setLabel('发布合作面板').setStyle(ButtonStyle.Success),
+    ),
+  ];
+}
+
+function partnerPublicComponents() {
+  return [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('partner_apply').setLabel('申请合作').setStyle(ButtonStyle.Success))];
+}
+
+function partnerReviewEmbed(app, status = '待审核') {
+  return new EmbedBuilder().setColor(status === '待审核' ? 0xfee75c : 0x57f287).setTitle(`合作申请：${app.serverName}`).setDescription(app.promotion)
+    .addFields(
+      { name: '服务器数量', value: app.serverCount, inline: true },
+      { name: '合作代表', value: `<@${app.representativeId}>`, inline: true },
+      { name: '状态', value: status, inline: true },
+    ).setFooter({ text: `申请 ID：${app.id}` }).setTimestamp(new Date(app.createdAt));
+}
+
+function partnerReviewComponents(appId) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`partner_reject:${appId}`).setLabel('不同意').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`partner_post:${appId}`).setLabel('放贴文').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`partner_text:${appId}`).setLabel('放文字频道').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`partner_channel:${appId}`).setLabel('开频道').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`partner_ticket:${appId}`).setLabel('开单').setStyle(ButtonStyle.Success),
+  )];
+}
+
+function partnerApplyModal() {
+  return new ModalBuilder().setCustomId('partner_apply_modal').setTitle('申请 Discord 服务器合作').addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('server_name').setLabel('服务器名称').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('server_count').setLabel('服务器数量').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50).setPlaceholder('例如：1 个服务器')),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('promotion').setLabel('宣传文＆链接（同一个填写框）').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(4000)),
+  );
+}
+
+async function notifyPartner(app, content) {
+  const user = await client.users.fetch(app.representativeId).catch(() => null);
+  if (user) await user.send(content).catch(() => {});
+}
+
+async function completePartnerAction(interaction, app, action) {
+  const guild = interaction.guild;
+  const config = getGuildSettings(guild.id).partnership;
+  const representative = `<@${app.representativeId}>`;
+  let result = null;
+  if (action === 'post') {
+    const forum = await guild.channels.fetch(config.forumChannelId).catch(() => null);
+    if (!forum || forum.type !== ChannelType.GuildForum) throw new Error('贴文频道未设置或不是论坛频道。');
+    const thread = await forum.threads.create({ name: app.serverName.slice(0, 100), message: { content: '点击查看' }, reason: '发布合作贴文' });
+    await thread.send({ content: app.promotion, allowedMentions: { parse: ['users', 'roles', 'everyone'] } });
+    await thread.send({ content: `合作代表：${representative}`, allowedMentions: { users: [app.representativeId] } });
+    result = `已在 ${forum} 发布合作贴文。`;
+  } else if (action === 'text') {
+    const channel = await guild.channels.fetch(config.textChannelId).catch(() => null);
+    if (!channel?.isTextBased?.()) throw new Error('文字频道未设置或不可发送消息。');
+    await channel.send({ content: app.promotion, allowedMentions: { parse: ['users', 'roles', 'everyone'] } });
+    result = `已在 ${channel} 发布合作宣传。`;
+  } else if (action === 'channel') {
+    const category = await guild.channels.fetch(config.partnerCategoryId).catch(() => null);
+    if (!category || category.type !== ChannelType.GuildCategory) throw new Error('合作频道类别未设置。');
+    const channel = await guild.channels.create({ name: app.serverName.slice(0, 100), type: ChannelType.GuildText, parent: category.id, permissionOverwrites: [
+      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.UseApplicationCommands] },
+      { id: app.representativeId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels], deny: [PermissionFlagsBits.UseApplicationCommands] },
+      { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
+    ], reason: '创建合作频道' });
+    await channel.send({ content: `${app.promotion}\n\n合作代表：${representative}`, allowedMentions: { users: [app.representativeId] } });
+    result = `已创建合作频道 ${channel}。`;
+  } else if (action === 'ticket') {
+    const category = await guild.channels.fetch(config.ticketCategoryId).catch(() => null);
+    if (!category || category.type !== ChannelType.GuildCategory) throw new Error('工单类别未设置。');
+    const channel = await guild.channels.create({ name: `合作-${app.serverName}`.slice(0, 100), type: ChannelType.GuildText, parent: category.id, permissionOverwrites: [
+      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.UseApplicationCommands] },
+      { id: app.representativeId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory], deny: [PermissionFlagsBits.UseApplicationCommands] },
+      { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
+    ], reason: '创建合作工单' });
+    settings.partnerTickets[channel.id] = { channelId: channel.id, guildId: guild.id, appId: app.id, representativeId: app.representativeId, closed: false };
+    await channel.send({ embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle(`合作工单：${app.serverName}`).setDescription(`${app.promotion}\n\n合作代表：${representative}`)], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_close:${channel.id}`).setLabel('关单').setStyle(ButtonStyle.Danger))] });
+    saveSettings();
+    result = `已创建合作工单 ${channel}。`;
+  }
+  app.status = 'approved';
+  app.action = action;
+  app.completedAt = Date.now();
+  saveSettings();
+  await notifyPartner(app, '恭喜合作！你的 Discord 服务器合作申请已经通过。');
+  return result;
+}
+
 const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('检查机器人是否在线。'),
   new SlashCommandBuilder().setName('help').setDescription('查看可用指令。'),
@@ -913,6 +1041,7 @@ const commands = [
   new SlashCommandBuilder().setName('roles').setDescription('打开身份组面板设置。'),
   new SlashCommandBuilder().setName('moderation').setDescription('打开管理员惩罚系统设置。'),
   new SlashCommandBuilder().setName('serverstats').setDescription('打开服务器统计频道设置。'),
+  new SlashCommandBuilder().setName('partnership').setDescription('打开服务器合作管理面板。'),
   new SlashCommandBuilder().setName('announce').setDescription('打开机器人代发公告面板。'),
   new SlashCommandBuilder()
     .setName('sticky').setDescription('设置或取消频道置底消息。')
@@ -1236,7 +1365,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
@@ -1270,6 +1399,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats), ephemeral: true });
+    } else if (interaction.commandName === 'partnership') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置合作系统。', ephemeral: true });
+        return;
+      }
+      await interaction.reply({ embeds: [partnerAdminEmbed(interaction.guild, config)], components: partnerAdminComponents(), ephemeral: true });
     } else if (interaction.commandName === 'announce') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以使用公告代发功能。', ephemeral: true });
@@ -1389,6 +1524,123 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     await interaction.showModal(announceModal(interaction.customId === 'announce_embed' ? 'embed' : 'text'));
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === 'partner_apply') {
+    await interaction.showModal(partnerApplyModal());
+    return;
+  }
+
+  if (interaction.isButton() && /^partner_(reject|post|text|channel|ticket):/.test(interaction.customId)) {
+    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以审核合作申请。', ephemeral: true }); return; }
+    const [kind, appId] = interaction.customId.split(':');
+    const app = settings.partnerApplications[appId];
+    if (!app || app.guildId !== interaction.guild.id) { await interaction.reply({ content: '找不到这个合作申请。', ephemeral: true }); return; }
+    if (app.status && app.status !== 'pending') { await interaction.reply({ content: `这个申请已经处理过了（${app.status}）。`, ephemeral: true }); return; }
+    if (kind === 'partner_reject') {
+      await interaction.showModal(new ModalBuilder().setCustomId(`partner_reject_modal:${appId}`).setTitle('拒绝合作申请').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('拒绝原因（可留空）').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000))));
+      return;
+    }
+    await interaction.deferUpdate();
+    try {
+      const result = await completePartnerAction(interaction, app, kind.replace('partner_', ''));
+      await interaction.editReply({ embeds: [partnerReviewEmbed(app, '已通过 · ' + kind.replace('partner_', ''))], components: [] });
+      console.log(result);
+    } catch (error) {
+      console.error('Partner action failed:', error);
+      await interaction.editReply({ content: `合作动作失败：${error.message}`, embeds: [partnerReviewEmbed(app, '处理失败')], components: partnerReviewComponents(app.id) });
+    }
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('partner_ticket_close:')) {
+    const ticket = settings.partnerTickets[interaction.customId.split(':')[1]];
+    if (!ticket || ticket.guildId !== interaction.guild.id) { await interaction.reply({ content: '这个工单不存在。', ephemeral: true }); return; }
+    const admin = await canManage(interaction);
+    if (interaction.user.id !== ticket.representativeId && !admin) { await interaction.reply({ content: '只有合作代表或管理员可以关单。', ephemeral: true }); return; }
+    if (ticket.closed) { await interaction.reply({ content: '这个工单已经关闭。', ephemeral: true }); return; }
+    await interaction.reply({ content: '确定要关闭这个工单吗？关闭后合作代表将无法看见工单。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_confirm:${ticket.channelId}`).setLabel('确认关单').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId(`partner_ticket_cancel:${ticket.channelId}`).setLabel('取消').setStyle(ButtonStyle.Secondary))], ephemeral: true });
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('partner_ticket_cancel:')) {
+    await interaction.update({ content: '已取消关单。', components: [] });
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('partner_ticket_confirm:')) {
+    const ticket = settings.partnerTickets[interaction.customId.split(':')[1]];
+    if (!ticket || ticket.guildId !== interaction.guild.id) { await interaction.update({ content: '这个工单不存在。', components: [] }); return; }
+    const admin = await canManage(interaction);
+    if (interaction.user.id !== ticket.representativeId && !admin) { await interaction.update({ content: '你没有权限关闭这个工单。', components: [] }); return; }
+    const channel = await interaction.guild.channels.fetch(ticket.channelId).catch(() => null);
+    if (!channel) { await interaction.update({ content: '工单频道已经不存在。', components: [] }); return; }
+    await interaction.update({ content: '正在关闭工单……', components: [] });
+    await channel.permissionOverwrites.edit(ticket.representativeId, { ViewChannel: false, SendMessages: false, UseApplicationCommands: false }).catch(console.error);
+    ticket.closed = true;
+    ticket.closedAt = Date.now();
+    saveSettings();
+    await channel.send({ content: '工单已关闭。管理员可以选择再次开启或直接删除。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_reopen:${ticket.channelId}`).setLabel('再次开启').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`partner_ticket_delete:${ticket.channelId}`).setLabel('直接删除').setStyle(ButtonStyle.Danger))] });
+    await notifyPartner({ representativeId: ticket.representativeId }, '你的合作工单已经关闭。');
+    return;
+  }
+
+  if (interaction.isButton() && /^partner_ticket_(reopen|delete):/.test(interaction.customId)) {
+    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以管理已关闭工单。', ephemeral: true }); return; }
+    const ticket = settings.partnerTickets[interaction.customId.split(':')[1]];
+    if (!ticket || ticket.guildId !== interaction.guild.id) { await interaction.reply({ content: '这个工单不存在。', ephemeral: true }); return; }
+    const channel = await interaction.guild.channels.fetch(ticket.channelId).catch(() => null);
+    if (!channel) { delete settings.partnerTickets[ticket.channelId]; saveSettings(); await interaction.reply({ content: '工单频道已经不存在。', ephemeral: true }); return; }
+    if (interaction.customId.startsWith('partner_ticket_delete:')) {
+      await interaction.reply({ content: '工单即将删除。', ephemeral: true });
+      delete settings.partnerTickets[ticket.channelId];
+      saveSettings();
+      await channel.delete('管理员删除合作工单').catch(console.error);
+      return;
+    }
+    await interaction.update({ content: '这个关闭工单的管理面板已失效。', components: [] });
+    await channel.permissionOverwrites.edit(ticket.representativeId, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true, UseApplicationCommands: false }).catch(console.error);
+    ticket.closed = false;
+    saveSettings();
+    await channel.send({ content: '工单已再次开启，合作代表可以继续查看和发言。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_close:${ticket.channelId}`).setLabel('关单').setStyle(ButtonStyle.Danger))] });
+    return;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId === 'partner_apply_modal') {
+    const config = getGuildSettings(interaction.guild.id).partnership;
+    const reviewChannel = config.reviewChannelId && await interaction.guild.channels.fetch(config.reviewChannelId).catch(() => null);
+    if (!reviewChannel?.isTextBased?.()) { await interaction.reply({ content: '管理员还没有设置合作审核频道，暂时无法提交申请。', ephemeral: true }); return; }
+    await interaction.deferReply({ ephemeral: true });
+    const app = {
+      id: partnerId(), guildId: interaction.guild.id, representativeId: interaction.user.id,
+      serverName: interaction.fields.getTextInputValue('server_name').trim(),
+      serverCount: interaction.fields.getTextInputValue('server_count').trim(),
+      promotion: interaction.fields.getTextInputValue('promotion').trim(), status: 'pending', createdAt: Date.now(), reviewMessageId: '',
+    };
+    settings.partnerApplications[app.id] = app;
+    const message = await reviewChannel.send({ embeds: [partnerReviewEmbed(app)], components: partnerReviewComponents(app.id) }).catch((error) => { console.error('Could not send partner review:', error); return null; });
+    if (!message) { delete settings.partnerApplications[app.id]; await interaction.editReply({ content: '合作申请发送失败，请通知管理员检查审核频道权限。' }); return; }
+    app.reviewMessageId = message.id;
+    saveSettings();
+    await interaction.editReply({ content: '合作资料已提交，等待管理员审核。审核结果会私讯通知你。' });
+    return;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('partner_reject_modal:')) {
+    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以拒绝合作申请。', ephemeral: true }); return; }
+    const app = settings.partnerApplications[interaction.customId.split(':')[1]];
+    if (!app || app.status !== 'pending') { await interaction.reply({ content: '这个合作申请已经处理过了。', ephemeral: true }); return; }
+    const reason = interaction.fields.getTextInputValue('reason').trim();
+    app.status = 'rejected';
+    app.rejectionReason = reason;
+    app.rejectedAt = Date.now();
+    saveSettings();
+    const reviewChannel = await interaction.guild.channels.fetch(getGuildSettings(interaction.guild.id).partnership.reviewChannelId).catch(() => null);
+    const reviewMessage = reviewChannel?.isTextBased() ? await reviewChannel.messages.fetch(app.reviewMessageId).catch(() => null) : null;
+    if (reviewMessage) await reviewMessage.edit({ embeds: [partnerReviewEmbed(app, '已拒绝')], components: [] }).catch(() => {});
+    await notifyPartner(app, `你的合作申请未通过。${reason ? `\n原因：${reason}` : ''}`);
+    await interaction.reply({ content: '已拒绝合作申请，并私讯通知合作代表。', ephemeral: true });
     return;
   }
 
@@ -1544,6 +1796,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
       } else {
         await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
       }
+    } else if (interaction.customId.startsWith('partner_')) {
+      const channelTypes = {
+        partner_review_channel: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
+        partner_forum_channel: [ChannelType.GuildForum],
+        partner_text_channel: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
+        partner_category: [ChannelType.GuildCategory],
+        partner_ticket_category: [ChannelType.GuildCategory],
+      }[interaction.customId];
+      if (interaction.customId === 'partner_refresh') {
+        await interaction.update({ embeds: [partnerAdminEmbed(interaction.guild, config)], components: partnerAdminComponents() });
+      } else if (interaction.customId === 'partner_publish') {
+        await interaction.deferReply({ ephemeral: true });
+        const message = await interaction.channel.send({ embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle('服务器合作').setDescription('如果你想与本服务器进行合作，请点击下方“申请合作”按钮填写资料。')], components: partnerPublicComponents() });
+        await interaction.editReply({ content: `合作公开面板已发布：[点击查看](https://discord.com/channels/${interaction.guild.id}/${message.channel.id}/${message.id})` });
+      } else if (channelTypes) {
+        const menu = new ChannelSelectMenuBuilder().setCustomId(`${interaction.customId}_select`).setPlaceholder('选择目标频道或类别').setMinValues(1).setMaxValues(1).setChannelTypes(...channelTypes);
+        await interaction.reply({ content: '请选择合作系统目标；这个提示仅你可见。', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+      }
     } else if (interaction.customId === 'moderation_log_channel') {
       const menu = new ChannelSelectMenuBuilder()
         .setCustomId('moderation_log_channel_select')
@@ -1613,6 +1883,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isChannelSelectMenu()) {
+    if (interaction.customId.startsWith('partner_')) {
+      const key = {
+        partner_review_channel_select: 'reviewChannelId',
+        partner_forum_channel_select: 'forumChannelId',
+        partner_text_channel_select: 'textChannelId',
+        partner_category_select: 'partnerCategoryId',
+        partner_ticket_category_select: 'ticketCategoryId',
+      }[interaction.customId];
+      if (key) {
+        config.partnership[key] = interaction.values[0];
+        saveSettings();
+        await interaction.update({ content: '合作系统目标已保存，请回到原来的私密面板并点击“刷新”。', components: [] });
+        return;
+      }
+    }
     if (interaction.customId === 'moderation_log_channel_select') {
       config.moderationLogChannelId = interaction.values[0];
       saveSettings();
