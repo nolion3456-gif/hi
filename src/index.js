@@ -1012,6 +1012,15 @@ async function completePartnerAction(interaction, app, action) {
     await channel.send({ content: `${app.promotion}\n\n合作代表：${representative}`, allowedMentions: { users: [app.representativeId] } });
     result = `已创建合作频道 ${channel}。`;
   } else if (action === 'ticket') {
+    if (app.ticketChannelId) {
+      const existingTicket = await guild.channels.fetch(app.ticketChannelId).catch(() => null);
+      if (existingTicket) {
+        result = `这个合作申请已经有咨询工单 ${existingTicket}。`;
+      } else {
+        delete app.ticketChannelId;
+      }
+    }
+    if (result) return result;
     const category = await guild.channels.fetch(config.ticketCategoryId).catch(() => null);
     if (!category || category.type !== ChannelType.GuildCategory) throw new Error('工单类别未设置。');
     const channel = await guild.channels.create({ name: `合作-${app.serverName}`.slice(0, 100), type: ChannelType.GuildText, parent: category.id, permissionOverwrites: [
@@ -1020,6 +1029,8 @@ async function completePartnerAction(interaction, app, action) {
       { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
     ], reason: '创建合作工单' });
     settings.partnerTickets[channel.id] = { channelId: channel.id, guildId: guild.id, appId: app.id, representativeId: app.representativeId, closed: false };
+    app.ticketChannelId = channel.id;
+    app.ticketOpenedAt = Date.now();
     const ticketEmbed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle(`合作工单：${app.serverName}`)
@@ -1034,6 +1045,11 @@ async function completePartnerAction(interaction, app, action) {
     await channel.send({ embeds: [ticketEmbed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_close:${channel.id}`).setLabel('关单').setStyle(ButtonStyle.Danger))] });
     saveSettings();
     result = `已创建合作工单 ${channel}。`;
+  }
+  if (action === 'ticket') {
+    saveSettings();
+    await notifyPartner(app, '管理员已为你的合作申请开启咨询工单，请在工单内补充合作详细内容。目前申请尚未代表合作成功。');
+    return result;
   }
   app.status = 'approved';
   app.action = action;
@@ -1557,7 +1573,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.deferUpdate();
     try {
       const result = await completePartnerAction(interaction, app, kind.replace('partner_', ''));
-      await interaction.editReply({ embeds: [partnerReviewEmbed(app, '已通过 · ' + kind.replace('partner_', ''))], components: [] });
+      if (kind === 'partner_ticket') {
+        await interaction.editReply({ embeds: [partnerReviewEmbed(app, '已开启咨询工单，待进一步审核')], components: partnerReviewComponents(app.id) });
+      } else {
+        await interaction.editReply({ embeds: [partnerReviewEmbed(app, '已通过 · ' + kind.replace('partner_', ''))], components: [] });
+      }
       console.log(result);
     } catch (error) {
       console.error('Partner action failed:', error);
