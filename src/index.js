@@ -298,6 +298,10 @@ function isGuildAllowed(guildId) {
   return allowedGuildIds.size === 0 || allowedGuildIds.has(guildId);
 }
 
+function isBotOwner(userId) {
+  return Boolean(ownerId && userId === ownerId);
+}
+
 async function isGuildUsable(guild) {
   if (isGuildAllowed(guild.id)) return true;
   if (!ownerId) return false;
@@ -305,7 +309,9 @@ async function isGuildUsable(guild) {
 }
 
 async function canManage(interaction) {
-  if (!interaction.guild || !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return false;
+  if (!interaction.guild) return false;
+  if (isBotOwner(interaction.user?.id)) return true;
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return false;
   if (allowedGuildIds.has(interaction.guild.id)) return true;
   if (!ownerId) return allowedGuildIds.size === 0;
   return Boolean(await interaction.guild.members.fetch(ownerId).catch(() => null));
@@ -1260,6 +1266,10 @@ async function performModeration(interaction, action) {
       await interaction.editReply({ content: '请输入有效的 Discord 用户 ID。' });
       return;
     }
+    if (isBotOwner(userId)) {
+      await interaction.editReply({ content: '这个用户无法执行惩罚操作。' });
+      return;
+    }
     const target = await client.users.fetch(userId).catch(() => null);
     if (!target) {
       await interaction.editReply({ content: '找不到这个用户。' });
@@ -1287,6 +1297,10 @@ async function performModeration(interaction, action) {
   const member = user && await interaction.guild.members.fetch(user.id).catch(() => null);
   if (!member) {
     await interaction.editReply({ content: '找不到这个服务器成员。' });
+    return;
+  }
+  if (isBotOwner(member.id)) {
+    await interaction.editReply({ content: '这个成员无法执行惩罚操作。' });
     return;
   }
   if (member.id === interaction.user.id) {
@@ -1335,7 +1349,7 @@ async function performModeration(interaction, action) {
 }
 
 async function performPrefixModeration(message, action, args) {
-  if (!message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
+  if (!isBotOwner(message.author.id) && !message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
     await message.reply('只有拥有“管理服务器”权限的管理员可以使用惩罚指令。');
     return;
   }
@@ -1344,6 +1358,7 @@ async function performPrefixModeration(message, action, args) {
   if (action === 'unban') {
     const userId = args.target;
     if (!/^\d{15,25}$/.test(userId || '')) { await message.reply('用法：unban 用户ID 原因'); return; }
+    if (isBotOwner(userId)) { await message.reply('这个用户无法执行惩罚操作。'); return; }
     const target = await client.users.fetch(userId).catch(() => null);
     const ban = await message.guild.bans.fetch(userId).catch(() => null);
     if (!target || !ban) { await message.reply('找不到这个用户，或这个用户目前没有被本服务器封禁。'); return; }
@@ -1360,6 +1375,7 @@ async function performPrefixModeration(message, action, args) {
   const targetId = (args.target || '').match(/^<@!?([0-9]{15,25})>$/)?.[1] || args.target;
   const member = await message.guild.members.fetch(targetId).catch(() => null);
   if (!member) { await message.reply('找不到这个服务器成员。用法：mute @成员 10m 原因'); return; }
+  if (isBotOwner(member.id)) { await message.reply('这个成员无法执行惩罚操作。'); return; }
   if (member.id === message.author.id) { await message.reply('不能对自己执行这个操作。'); return; }
   if ((action === 'mute' || action === 'unmute') && !member.moderatable) { await message.reply('Bot 无法管理这个成员，请检查身份组层级和权限。'); return; }
   if (action === 'kick' && !member.kickable) { await message.reply('Bot 无法踢出这个成员，请检查身份组层级和权限。'); return; }
