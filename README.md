@@ -30,6 +30,12 @@
 - 真人成员数量
 - 当前在线人数
 - 机器人数量
+- 身份组数量
+- 频道数量
+- 服务器加成数量
+- 加成人数
+
+统计会在成员、在线状态、身份组、频道和服务器加成变化时自动刷新，并每 60 秒进行一次兜底刷新。
 
 频道名称可以自由加入表情符号，并支持 `{count}` 变量，例如：
 
@@ -239,7 +245,8 @@ OWNER_ID=你的Discord用户ID
 ALLOWED_GUILD_IDS=允许使用的服务器ID,另一个服务器ID
 ```
 
-- 现在 `/welcome`、`/roles` 等管理面板要求使用者拥有 **管理服务器 / Manage Server** 权限。
+- 现在 `/welcome`、`/roles` 等管理面板要求使用者拥有 **管理服务器 / Manage Server** 权限；`OWNER_ID` 对应的机器人拥有者不受此限制。
+- 惩罚指令不会对 `OWNER_ID` 对应的机器人拥有者生效。
 - 如果填写了 `OWNER_ID` 且服务器不在允许列表，服务器必须有你的账号，管理员才可以使用机器人。
 - 如果服务器 ID 写入 `ALLOWED_GUILD_IDS`，该服务器的管理员可以使用机器人，即使你不在该服务器。
 - 设置 `ALLOWED_GUILD_IDS` 后，列出的服务器可以使用；未列出的服务器只有在服务器中有你的账号时才可以使用，否则机器人会自动离开。
@@ -286,6 +293,18 @@ ALLOWED_GUILD_IDS=123456789012345678
 npm install
 npm start
 ```
+
+Bot-Hosting.net 请确认启动命令为 `npm start`（不要填写 `node index.js`），并在环境变量中设置：
+
+```env
+DISCORD_TOKEN=你的Bot Token
+CLIENT_ID=你的Application ID
+OWNER_ID=你的Discord用户ID
+GUILD_ID=可留空
+ALLOWED_GUILD_IDS=允许使用的服务器ID,另一个服务器ID
+```
+
+如果面板显示 Bot 在线但指令不可用，请确认 `CLIENT_ID` 是 Developer Portal 的 **Application ID**，不是服务器 ID；修改环境变量后需要完整重启服务器。依赖会由 `package.json` / `package-lock.json` 自动安装，Node.js 版本应为 18.17 或更高。
 
 设置 `GUILD_ID` 或 `ALLOWED_GUILD_IDS` 后，Bot 会把斜杠指令注册到指定服务器，通常会立即显示。两个变量中的服务器 ID 会合并注册；两个变量都为空时会注册为全局指令，Discord 可能需要最多约一小时才显示。
 

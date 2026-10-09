@@ -237,14 +237,26 @@ function getGuildSettings(guildId) {
       },
       moderationLogChannelId: '',
       moderationPrefix: '!',
-      serverStats: {
-        enabled: false,
-        totalChannelId: '',
-        onlineChannelId: '',
-        botChannelId: '',
-        totalName: '👥 成员：{count}',
-        onlineName: '🟢 在线：{count}',
-        botName: '🤖 机器人：{count}',
+    serverStats: {
+      enabled: false,
+      showRoles: false,
+      showChannels: false,
+      showBoosts: false,
+      showBoosters: false,
+      totalChannelId: '',
+      onlineChannelId: '',
+      botChannelId: '',
+      totalName: '👥 成员：{count}',
+      onlineName: '🟢 在线：{count}',
+      botName: '🤖 机器人：{count}',
+      roleChannelId: '',
+      channelChannelId: '',
+      boostChannelId: '',
+      boosterChannelId: '',
+      roleName: '🎭 身份组：{count}',
+      channelName: '📚 频道：{count}',
+      boostName: '🚀 加成：{count}',
+      boosterName: '💎 加成人数：{count}',
       },
     };
   }
@@ -271,6 +283,10 @@ function getGuildSettings(guildId) {
     showHumans: true,
     showOnline: true,
     showBots: true,
+    showRoles: false,
+    showChannels: false,
+    showBoosts: false,
+    showBoosters: false,
     totalChannelId: '',
     humanChannelId: '',
     onlineChannelId: '',
@@ -279,6 +295,14 @@ function getGuildSettings(guildId) {
     humanName: '👤 真人：{count}',
     onlineName: '🟢 在线：{count}',
     botName: '🤖 机器人：{count}',
+    roleChannelId: '',
+    channelChannelId: '',
+    boostChannelId: '',
+    boosterChannelId: '',
+    roleName: '🎭 身份组：{count}',
+    channelName: '📚 频道：{count}',
+    boostName: '🚀 加成：{count}',
+    boosterName: '💎 加成人数：{count}',
     ...settings[guildId].serverStats,
   };
   if (!settings[guildId].partnership) settings[guildId].partnership = {};
@@ -300,6 +324,10 @@ function isGuildAllowed(guildId) {
 
 function isBotOwner(userId) {
   return Boolean(ownerId && userId === ownerId);
+}
+
+async function fetchBotMember(guild) {
+  return guild.members.me || await guild.members.fetchMe().catch(() => null);
 }
 
 async function isGuildUsable(guild) {
@@ -443,7 +471,11 @@ function serverStatsEmbed(guild, config) {
       `总人数：${stats.showTotal ? (stats.totalChannelId ? `<#${stats.totalChannelId}>` : '待创建') : '已关闭'}\n` +
       `真人成员：${stats.showHumans ? (stats.humanChannelId ? `<#${stats.humanChannelId}>` : '待创建') : '已关闭'}\n` +
       `在线人数：${stats.showOnline ? (stats.onlineChannelId ? `<#${stats.onlineChannelId}>` : '待创建') : '已关闭'}\n` +
-      `机器人数量：${stats.showBots ? (stats.botChannelId ? `<#${stats.botChannelId}>` : '待创建') : '已关闭'}\n\n` +
+      `机器人数量：${stats.showBots ? (stats.botChannelId ? `<#${stats.botChannelId}>` : '待创建') : '已关闭'}\n` +
+      `身份组数量：${stats.showRoles ? (stats.roleChannelId ? `<#${stats.roleChannelId}>` : '待创建') : '已关闭'}\n` +
+      `频道数量：${stats.showChannels ? (stats.channelChannelId ? `<#${stats.channelChannelId}>` : '待创建') : '已关闭'}\n` +
+      `服务器加成数量：${stats.showBoosts ? (stats.boostChannelId ? `<#${stats.boostChannelId}>` : '待创建') : '已关闭'}\n` +
+      `加成人数：${stats.showBoosters ? (stats.boosterChannelId ? `<#${stats.boosterChannelId}>` : '待创建') : '已关闭'}\n\n` +
       '支持变量：`{count}`。频道名称可以自由加入表情符号；统计语音频道禁止成员加入连接。')
     .setFooter({ text: `${guild.name} · 统计频道会自动更新` });
 }
@@ -453,17 +485,22 @@ function serverStatsComponents(stats) {
     .setCustomId('serverstats_menu')
     .setPlaceholder('选择要显示的统计项目（可多选）')
     .setMinValues(1)
-    .setMaxValues(4)
+    .setMaxValues(8)
     .addOptions(
       { label: '总人数', value: 'total', description: '显示服务器真人与机器人总人数', default: stats.showTotal },
       { label: '真人成员', value: 'humans', description: '显示排除机器人的成员数量', default: stats.showHumans },
       { label: '在线人数', value: 'online', description: '显示当前在线人数', default: stats.showOnline },
       { label: '机器人数量', value: 'bots', description: '显示服务器中的机器人数量', default: stats.showBots },
+      { label: '身份组数量', value: 'roles', description: '显示服务器身份组数量', default: stats.showRoles },
+      { label: '频道数量', value: 'channels', description: '显示服务器频道数量', default: stats.showChannels },
+      { label: '服务器加成数量', value: 'boosts', description: '显示服务器目前获得的加成数量', default: stats.showBoosts },
+      { label: '加成人数', value: 'boosters', description: '显示目前提供服务器加成的成员数量', default: stats.showBoosters },
     );
   return [
     new ActionRowBuilder().addComponents(menu),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('serverstats_setup').setLabel('设置频道名称').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('serverstats_more_setup').setLabel('设置更多名称').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('serverstats_update').setLabel('刷新').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('serverstats_toggle').setLabel(stats.enabled ? '关闭统计' : '开启统计').setStyle(stats.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
     ),
@@ -478,6 +515,18 @@ function serverStatsModal(stats) {
     ['bot_name', '机器人统计频道名称', stats.botName, '例如：🤖 机器人：{count}'],
   ];
   return new ModalBuilder().setCustomId('serverstats_modal').setTitle('设置服务器统计频道').addComponents(
+    ...fields.map(([id, label, value, placeholder]) => new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setValue(value).setPlaceholder(placeholder).setMaxLength(100))),
+  );
+}
+
+function serverStatsMoreModal(stats) {
+  const fields = [
+    ['role_name', '身份组数量频道名称', stats.roleName, '例如：🎭 身份组：{count}'],
+    ['channel_name', '频道数量频道名称', stats.channelName, '例如：📚 频道：{count}'],
+    ['boost_name', '加成数量频道名称', stats.boostName, '例如：🚀 加成：{count}'],
+    ['booster_name', '加成人数频道名称', stats.boosterName, '例如：💎 加成人数：{count}'],
+  ];
+  return new ModalBuilder().setCustomId('serverstats_more_modal').setTitle('设置更多统计频道').addComponents(
     ...fields.map(([id, label, value, placeholder]) => new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setValue(value).setPlaceholder(placeholder).setMaxLength(100))),
   );
 }
@@ -505,12 +554,20 @@ async function updateServerStats(guild) {
     humans: members.filter((member) => !member.user.bot).size,
     online: members.filter((member) => member.presence && member.presence.status !== 'offline').size,
     bots: members.filter((member) => member.user.bot).size,
+    roles: guild.roles.cache.filter((role) => role.id !== guild.id).size,
+    channels: guild.channels.cache.filter((channel) => channel.type !== ChannelType.GuildCategory).size,
+    boosts: guild.premiumSubscriptionCount || 0,
+    boosters: guild.members.cache.filter((member) => member.premiumSince).size,
   };
   const definitions = [
     ['totalChannelId', 'totalName', 'showTotal', values.total],
     ['humanChannelId', 'humanName', 'showHumans', values.humans],
     ['onlineChannelId', 'onlineName', 'showOnline', values.online],
     ['botChannelId', 'botName', 'showBots', values.bots],
+    ['roleChannelId', 'roleName', 'showRoles', values.roles],
+    ['channelChannelId', 'channelName', 'showChannels', values.channels],
+    ['boostChannelId', 'boostName', 'showBoosts', values.boosts],
+    ['boosterChannelId', 'boosterName', 'showBoosters', values.boosters],
   ];
   for (const [channelKey, nameKey, showKey, count] of definitions) {
     let channel = stats[channelKey] ? await guild.channels.fetch(stats[channelKey]).catch(() => null) : null;
@@ -537,11 +594,26 @@ async function updateServerStats(guild) {
   saveSettings();
 }
 
+const serverStatsTimers = new Map();
+function scheduleServerStatsUpdate(guild) {
+  if (serverStatsTimers.has(guild.id)) clearTimeout(serverStatsTimers.get(guild.id));
+  serverStatsTimers.set(guild.id, setTimeout(() => {
+    serverStatsTimers.delete(guild.id);
+    updateServerStats(guild).catch((error) => console.error('Could not refresh server stats:', error));
+  }, 1500));
+}
+
 function parseDuration(value) {
-  const match = String(value).trim().match(/^(\d+)\s*(s|m|h|d|w)$/i);
+  const match = String(value).trim().match(/^(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h|days?|d|weeks?|w)$/i);
   if (!match) return null;
   const amount = Number(match[1]);
-  const units = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+  const units = {
+    s: 1000, sec: 1000, secs: 1000, second: 1000, seconds: 1000,
+    m: 60_000, min: 60_000, mins: 60_000, minute: 60_000, minutes: 60_000,
+    h: 3_600_000, hr: 3_600_000, hrs: 3_600_000, hour: 3_600_000, hours: 3_600_000,
+    d: 86_400_000, day: 86_400_000, days: 86_400_000,
+    w: 604_800_000, week: 604_800_000, weeks: 604_800_000,
+  };
   const milliseconds = amount * units[match[2].toLowerCase()];
   return milliseconds > 0 && milliseconds <= 28 * 86_400_000 ? milliseconds : null;
 }
@@ -1174,6 +1246,10 @@ client.once(Events.ClientReady, (readyClient) => {
     }
   }
   for (const guild of readyClient.guilds.cache.values()) updateServerStats(guild).catch(console.error);
+  const periodicStatsRefresh = setInterval(() => {
+    for (const guild of readyClient.guilds.cache.values()) scheduleServerStatsUpdate(guild);
+  }, 60_000);
+  periodicStatsRefresh.unref?.();
 });
 
 client.on(Events.GuildCreate, async (guild) => {
@@ -1210,9 +1286,17 @@ async function sendLeave(member) {
 
 client.on(Events.GuildMemberAdd, sendWelcome);
 client.on(Events.GuildMemberRemove, sendLeave);
-client.on(Events.GuildMemberAdd, (member) => updateServerStats(member.guild).catch(console.error));
-client.on(Events.GuildMemberRemove, (member) => updateServerStats(member.guild).catch(console.error));
-client.on(Events.PresenceUpdate, (_oldPresence, presence) => updateServerStats(presence.guild).catch(console.error));
+client.on(Events.GuildMemberAdd, (member) => scheduleServerStatsUpdate(member.guild));
+client.on(Events.GuildMemberRemove, (member) => scheduleServerStatsUpdate(member.guild));
+client.on(Events.GuildMemberUpdate, (_oldMember, member) => scheduleServerStatsUpdate(member.guild));
+client.on(Events.GuildRoleCreate, (role) => scheduleServerStatsUpdate(role.guild));
+client.on(Events.GuildRoleDelete, (role) => scheduleServerStatsUpdate(role.guild));
+client.on(Events.GuildRoleUpdate, (_oldRole, role) => scheduleServerStatsUpdate(role.guild));
+client.on(Events.ChannelCreate, (channel) => channel.guild && scheduleServerStatsUpdate(channel.guild));
+client.on(Events.ChannelDelete, (channel) => channel.guild && scheduleServerStatsUpdate(channel.guild));
+client.on(Events.ChannelUpdate, (_oldChannel, channel) => channel.guild && scheduleServerStatsUpdate(channel.guild));
+client.on(Events.GuildUpdate, (guild) => scheduleServerStatsUpdate(guild));
+client.on(Events.PresenceUpdate, (_oldPresence, presence) => scheduleServerStatsUpdate(presence.guild));
 
 function moderationEmbed(guild, action, target, duration, reason, executor, actionChannel, directMessage = false) {
   const targetId = target.id || target.user?.id;
@@ -1496,7 +1580,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ content: '这个身份组不存在或无法由机器人管理。', ephemeral: true });
       return;
     }
-    if (role.position >= interaction.guild.members.me.roles.highest.position) {
+    const botMember = await fetchBotMember(interaction.guild);
+    if (!botMember?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position >= botMember.roles.highest.position) {
       await interaction.reply({ content: '机器人无法管理这个身份组，请把 Bot 的身份组拖到它上面。', ephemeral: true });
       return;
     }
@@ -1817,6 +1902,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     } else if (interaction.customId === 'serverstats_setup') {
       await interaction.showModal(serverStatsModal(config.serverStats));
+    } else if (interaction.customId === 'serverstats_more_setup') {
+      await interaction.showModal(serverStatsMoreModal(config.serverStats));
     } else if (interaction.customId === 'serverstats_update') {
       config.serverStats.enabled = true;
       await interaction.deferUpdate();
@@ -1989,7 +2076,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.customId !== 'role_add_select') return;
     const roleId = interaction.values[0];
     const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
-    if (!role || role.managed) {
+    const botMember = await fetchBotMember(interaction.guild);
+    if (!role || role.managed || !botMember?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position >= botMember.roles.highest.position) {
       await interaction.reply({ content: '这个身份组不存在或无法由机器人管理。', ephemeral: true });
       return;
     }
@@ -2006,7 +2094,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     for (const roleId of interaction.values) {
       if (!configuredRoles.has(roleId)) continue;
       const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
-      if (!role || role.managed || role.position >= interaction.guild.members.me.roles.highest.position) {
+      const botMember = await fetchBotMember(interaction.guild);
+      if (!role || role.managed || !botMember?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position >= botMember.roles.highest.position) {
         results.push(`无法管理 <@&${roleId}>`);
         continue;
       }
@@ -2033,6 +2122,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     config.serverStats.showHumans = selected.has('humans');
     config.serverStats.showOnline = selected.has('online');
     config.serverStats.showBots = selected.has('bots');
+    config.serverStats.showRoles = selected.has('roles');
+    config.serverStats.showChannels = selected.has('channels');
+    config.serverStats.showBoosts = selected.has('boosts');
+    config.serverStats.showBoosters = selected.has('boosters');
     saveSettings();
     await interaction.update({ content: '已保存要显示的统计项目。点击“刷新”后更新频道；“开启/关闭统计”按钮控制系统状态。', embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
     return;
@@ -2066,6 +2159,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply({ ephemeral: true });
       await updateServerStats(interaction.guild);
       await interaction.editReply({ content: '服务器统计频道已开启并更新。频道名称支持 `{count}` 和表情符号。统计类别和频道均已设置为成员不可加入。' });
+      return;
+    }
+    if (interaction.customId === 'serverstats_more_modal') {
+      const stats = config.serverStats;
+      stats.roleName = interaction.fields.getTextInputValue('role_name').trim() || '🎭 身份组：{count}';
+      stats.channelName = interaction.fields.getTextInputValue('channel_name').trim() || '📚 频道：{count}';
+      stats.boostName = interaction.fields.getTextInputValue('boost_name').trim() || '🚀 加成：{count}';
+      stats.boosterName = interaction.fields.getTextInputValue('booster_name').trim() || '💎 加成人数：{count}';
+      stats.enabled = true;
+      await interaction.deferReply({ ephemeral: true });
+      await updateServerStats(interaction.guild);
+      await interaction.editReply({ content: '更多统计频道名称已保存并更新。' });
       return;
     }
     if (interaction.customId === 'moderation_prefix_modal') {
