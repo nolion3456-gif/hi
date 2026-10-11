@@ -91,7 +91,7 @@ async function publishStickyToChannel(guild, channel, content) {
   const oldMessageId = config.global ? config.globalMessages[channel.id] : channelConfig.messageId;
   await deleteStickyMessage(channel, oldMessageId);
   const sent = await channel.send({
-    content: `这是一条stick内容\n${content}`,
+    content: `__**置底内容：**__\n${content}`,
     allowedMentions: { parse: ['users', 'roles', 'everyone'] },
   }).catch((error) => { console.error('Could not send sticky message:', error); return null; });
   if (!sent) return null;
@@ -330,6 +330,7 @@ function getGuildSettings(guildId) {
   if (!settings[guildId].sponsorGiveaway) settings[guildId].sponsorGiveaway = {};
   settings[guildId].sponsorGiveaway = {
     reviewChannelId: '',
+    publishChannelId: '',
     ...settings[guildId].sponsorGiveaway,
   };
   if (settings[guildId].serverStats.totalName === '👥 成员：{count}') settings[guildId].serverStats.totalName = '👥 总人数：{count}';
@@ -364,11 +365,31 @@ async function canManage(interaction) {
 }
 
 function replacePlaceholders(text, member) {
+  const guild = member.guild;
+  const humanCount = guild.members.cache.filter((item) => !item.user.bot).size;
+  const botCount = guild.members.cache.filter((item) => item.user.bot).size;
+  const onlineCount = guild.members.cache.filter((item) => item.presence && item.presence.status !== 'offline').size;
+  const offlineCount = Math.max(0, guild.memberCount - onlineCount);
+  const joinedAt = member.joinedAt ? new Date(member.joinedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '未知';
+  const createdAt = member.user.createdAt ? new Date(member.user.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '未知';
   return text
     .replaceAll('{user}', `<@${member.id}>`)
+    .replaceAll('{mention}', `<@${member.id}>`)
     .replaceAll('{username}', member.user.username)
-    .replaceAll('{server}', member.guild.name)
-    .replaceAll('{count}', String(member.guild.memberCount));
+    .replaceAll('{tag}', member.user.tag)
+    .replaceAll('{userId}', member.id)
+    .replaceAll('{server}', guild.name)
+    .replaceAll('{serverId}', guild.id)
+    .replaceAll('{count}', String(guild.memberCount))
+    .replaceAll('{memberCount}', String(guild.memberCount))
+    .replaceAll('{memberNumber}', String(guild.memberCount))
+    .replaceAll('{joinPosition}', String(guild.memberCount))
+    .replaceAll('{humanCount}', String(humanCount))
+    .replaceAll('{botCount}', String(botCount))
+    .replaceAll('{onlineCount}', String(onlineCount))
+    .replaceAll('{offlineCount}', String(offlineCount))
+    .replaceAll('{joinedAt}', joinedAt)
+    .replaceAll('{createdAt}', createdAt);
 }
 
 function panelEmbed(guild, config) {
@@ -380,7 +401,10 @@ function panelEmbed(guild, config) {
       `离开频道：${config.leaveChannelId ? `<#${config.leaveChannelId}>` : '未设置'}\n` +
       `欢迎图片：${config.welcomeImage ? '已设置' : '未设置'}\n` +
       `离开图片：${config.leaveImage ? '已设置' : '未设置'}\n` +
-      `私讯欢迎：${config.dmWelcome ? '开启' : '关闭'}`,
+      `私讯欢迎：${config.dmWelcome ? '开启' : '关闭'}\n\n` +
+      '可用变数：`{user}` `{username}` `{tag}` `{userId}` `{server}` `{serverId}`\n' +
+      '`{count}` `{memberCount}` `{memberNumber}` `{joinPosition}` `{humanCount}` `{botCount}`\n' +
+      '`{onlineCount}` `{offlineCount}` `{joinedAt}` `{createdAt}`',
     )
     .setFooter({ text: `${guild.name} · 只有授权用户可以操作` });
 }
@@ -725,7 +749,8 @@ function sponsorGiveawayPublicComponents() {
 
 function sponsorGiveawayAdminEmbed(guild, config) {
   return new EmbedBuilder().setColor(0x57f287).setTitle('赞助抽奖设置').setDescription(
-    `审核频道：${config.sponsorGiveaway.reviewChannelId ? `<#${config.sponsorGiveaway.reviewChannelId}>` : '未设置'}\n\n` +
+    `审核频道：${config.sponsorGiveaway.reviewChannelId ? `<#${config.sponsorGiveaway.reviewChannelId}>` : '未设置'}\n` +
+    `发布频道：${config.sponsorGiveaway.publishChannelId ? `<#${config.sponsorGiveaway.publishChannelId}>` : '未设置'}\n\n` +
     '设置审核频道后，发布申请面板，成员即可提交赞助抽奖资料。',
   ).setFooter({ text: `${guild.name} · 赞助抽奖需管理员审核` });
 }
@@ -734,6 +759,7 @@ function sponsorGiveawayAdminComponents() {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('sponsor_giveaway_review_channel').setLabel('设置审核频道').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('sponsor_giveaway_publish_channel').setLabel('设置发布频道').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('sponsor_giveaway_publish').setLabel('发布申请面板').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('sponsor_giveaway_refresh').setLabel('刷新').setStyle(ButtonStyle.Secondary),
     ),
@@ -765,9 +791,20 @@ function sponsorGiveawayReviewEmbed(app, status = '待审核') {
 
 function sponsorGiveawayReviewComponents(appId) {
   return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`sponsor_giveaway_edit:${appId}`).setLabel('修改内容').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`sponsor_giveaway_reject:${appId}`).setLabel('不同意').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`sponsor_giveaway_approve:${appId}`).setLabel('同意并发布抽奖').setStyle(ButtonStyle.Success),
   )];
+}
+
+function sponsorGiveawayEditModal(app) {
+  return new ModalBuilder().setCustomId(`sponsor_giveaway_edit_modal:${app.id}`).setTitle('修改赞助抽奖内容').addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prize').setLabel('奖品').setStyle(TextInputStyle.Short).setRequired(true).setValue(app.prize).setMaxLength(100)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('duration').setLabel('持续时间').setStyle(TextInputStyle.Short).setRequired(true).setValue(app.durationText).setMaxLength(30)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('winner_count').setLabel('获奖人数').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(app.winnerCount)).setMaxLength(3)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('description').setLabel('抽奖说明').setStyle(TextInputStyle.Paragraph).setRequired(false).setValue(app.description || '').setMaxLength(1000)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('conditions').setLabel('参加条件（可留空）').setStyle(TextInputStyle.Paragraph).setRequired(false).setValue(app.conditions || '').setMaxLength(1000)),
+  );
 }
 
 function parseSponsorConditions(text) {
@@ -1786,17 +1823,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  if (interaction.isButton() && /^sponsor_giveaway_(reject|approve):/.test(interaction.customId)) {
+  if (interaction.isButton() && /^sponsor_giveaway_(edit|reject|approve):/.test(interaction.customId)) {
     if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以审核赞助抽奖。', ephemeral: true }); return; }
     const [action, appId] = interaction.customId.split(':');
     const app = settings.sponsorGiveaways[appId];
     if (!app || app.guildId !== interaction.guild.id || app.status !== 'pending') { await interaction.reply({ content: '这个赞助抽奖申请已经处理过或不存在。', ephemeral: true }); return; }
+    if (action === 'sponsor_giveaway_edit') {
+      await interaction.showModal(sponsorGiveawayEditModal(app));
+      return;
+    }
     if (action === 'sponsor_giveaway_reject') {
       await interaction.showModal(new ModalBuilder().setCustomId(`sponsor_giveaway_reject_modal:${appId}`).setTitle('拒绝赞助抽奖').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('拒绝原因（可留空）').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000))));
       return;
     }
     await interaction.deferUpdate();
     try {
+      const sponsorConfig = getGuildSettings(interaction.guild.id).sponsorGiveaway;
+      if (!sponsorConfig.publishChannelId) throw new Error('管理员尚未设置赞助抽奖发布频道。');
+      app.publishChannelId = sponsorConfig.publishChannelId;
       await publishSponsoredGiveaway(interaction, app);
       app.status = 'approved';
       app.approvedAt = Date.now();
@@ -1954,6 +1998,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('sponsor_giveaway_edit_modal:')) {
+    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以修改赞助抽奖。', ephemeral: true }); return; }
+    const appId = interaction.customId.split(':')[1];
+    const app = settings.sponsorGiveaways[appId];
+    if (!app || app.status !== 'pending') { await interaction.reply({ content: '这个赞助抽奖申请已经处理过了。', ephemeral: true }); return; }
+    const durationText = interaction.fields.getTextInputValue('duration').trim();
+    const duration = parseDuration(durationText);
+    const winnerCount = Number(interaction.fields.getTextInputValue('winner_count'));
+    if (!duration || duration < 10_000 || !Number.isInteger(winnerCount) || winnerCount < 1 || winnerCount > 100) {
+      await interaction.reply({ content: '修改失败：时长至少 10 秒，获奖人数必须是 1 至 100 的整数。', ephemeral: true }); return;
+    }
+    app.prize = interaction.fields.getTextInputValue('prize').trim();
+    app.durationText = durationText;
+    app.duration = duration;
+    app.winnerCount = winnerCount;
+    app.description = interaction.fields.getTextInputValue('description').trim();
+    app.conditions = interaction.fields.getTextInputValue('conditions').trim();
+    Object.assign(app, parseSponsorConditions(app.conditions));
+    saveSettings();
+    const reviewMessage = await interaction.channel.messages.fetch(app.reviewMessageId).catch(() => null);
+    if (reviewMessage) await reviewMessage.edit({ embeds: [sponsorGiveawayReviewEmbed(app)], components: sponsorGiveawayReviewComponents(app.id) }).catch(() => {});
+    await interaction.reply({ content: '赞助抽奖内容已修改，管理员可以继续审核。', ephemeral: true });
+    return;
+  }
+
   if (interaction.isModalSubmit() && interaction.customId.startsWith('partner_reject_modal:')) {
     if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以拒绝合作申请。', ephemeral: true }); return; }
     const app = settings.partnerApplications[interaction.customId.split(':')[1]];
@@ -2063,6 +2132,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else if (interaction.customId === 'sponsor_giveaway_review_channel') {
       const menu = new ChannelSelectMenuBuilder().setCustomId('sponsor_giveaway_review_channel_select').setPlaceholder('选择赞助抽奖审核频道').setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setMinValues(1).setMaxValues(1);
       await interaction.reply({ content: '请选择赞助抽奖申请要发送到的审核频道：', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+    } else if (interaction.customId === 'sponsor_giveaway_publish_channel') {
+      const menu = new ChannelSelectMenuBuilder().setCustomId('sponsor_giveaway_publish_channel_select').setPlaceholder('选择赞助抽奖发布频道').setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setMinValues(1).setMaxValues(1);
+      await interaction.reply({ content: '请选择管理员同意后，赞助抽奖要发布到的指定频道：', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
     } else if (interaction.customId === 'sponsor_giveaway_publish') {
       await interaction.deferReply({ ephemeral: true });
       const message = await interaction.channel.send({ embeds: [new EmbedBuilder().setColor(0x57f287).setTitle('赞助抽奖申请').setDescription('想赞助一个抽奖吗？点击下方按钮填写奖品、时间和参加条件，提交后由管理员审核。')], components: sponsorGiveawayPublicComponents() });
@@ -2240,6 +2312,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       config.sponsorGiveaway.reviewChannelId = interaction.values[0];
       saveSettings();
       await interaction.update({ content: `赞助抽奖审核频道已设置为 <#${interaction.values[0]}>。请回到抽奖管理面板并点击刷新。`, components: [] });
+      return;
+    }
+    if (interaction.customId === 'sponsor_giveaway_publish_channel_select') {
+      config.sponsorGiveaway.publishChannelId = interaction.values[0];
+      saveSettings();
+      await interaction.update({ content: `赞助抽奖发布频道已设置为 <#${interaction.values[0]}>。管理员同意后会发送到这个频道。`, components: [] });
       return;
     }
     if (interaction.customId.startsWith('partner_')) {
