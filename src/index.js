@@ -62,6 +62,7 @@ if (!settings.partnerships) settings.partnerships = {};
 if (!settings.partnerApplications) settings.partnerApplications = {};
 if (!settings.partnerTickets) settings.partnerTickets = {};
 if (!settings.sponsorGiveaways) settings.sponsorGiveaways = {};
+if (!settings.guessNumberGames) settings.guessNumberGames = {};
 
 function saveSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
@@ -713,6 +714,34 @@ function giveawayButtons(giveaway, disabled = false) {
   )];
 }
 
+function guessNumberEmbed(game, ended = false, winner = null) {
+  const description = ended
+    ? `本轮猜数字已经结束。${winner ? `\n答对成员：<@${winner}>\n正确数字：**${game.answer}**` : `\n正确数字：**${game.answer}**`}`
+    : `管理员已经在本频道设置猜数字范围：**${game.min} 至 ${game.max}**\n\n点击下方按钮输入你猜的数字。每位成员可以持续尝试，直到有人猜中。`;
+  return new EmbedBuilder()
+    .setColor(ended ? 0x57f287 : 0x5865f2)
+    .setTitle(ended ? '猜数字结果' : '猜数字游戏')
+    .setDescription(description)
+    .addFields(
+      { name: '猜数字范围', value: `${game.min} 至 ${game.max}`, inline: true },
+      { name: '状态', value: ended ? '已结束' : '进行中', inline: true },
+    )
+    .setFooter({ text: `出题管理员：${game.hostName}` })
+    .setTimestamp(new Date(game.createdAt));
+}
+
+function guessNumberComponents(game, disabled = false) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`guess_number_try:${game.id}`).setLabel('我要猜数字').setStyle(ButtonStyle.Primary).setDisabled(disabled),
+  )];
+}
+
+function guessNumberModal(game) {
+  return new ModalBuilder().setCustomId(`guess_number_modal:${game.id}`).setTitle(`猜数字（${game.min}-${game.max}）`).addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guess').setLabel(`请输入 ${game.min} 至 ${game.max} 的整数`).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20)),
+  );
+}
+
 function giveawayPanelEmbed(guild, giveaways) {
   const active = giveaways.filter((item) => item.guildId === guild.id && item.status === 'active');
   const ended = giveaways.filter((item) => item.guildId === guild.id && item.status === 'ended').slice(-5);
@@ -1315,6 +1344,12 @@ const commands = [
       .addBooleanOption((option) => option.setName('all_channels').setDescription('是否取消所有频道的置底。').setRequired(false))),
   new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
   new SlashCommandBuilder()
+    .setName('guessnumber').setDescription('设置或取消当前频道的猜数字游戏。')
+    .addSubcommand((subcommand) => subcommand.setName('set').setDescription('在当前频道设置猜数字范围。')
+      .addIntegerOption((option) => option.setName('min').setDescription('最小数字。').setRequired(true))
+      .addIntegerOption((option) => option.setName('max').setDescription('最大数字。').setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('cancel').setDescription('结束当前频道的猜数字游戏。')),
+  new SlashCommandBuilder()
     .setName('mute').setDescription('暂时禁言一名成员。')
     .addUserOption((option) => option.setName('member').setDescription('要禁言的成员。').setRequired(true))
     .addStringOption((option) => option.setName('duration').setDescription('时长，例如 10m、2h、7d，最长28天。').setRequired(true))
@@ -1649,7 +1684,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 设置当前频道猜数字游戏\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
@@ -1720,6 +1755,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const active = Object.values(settings.giveaways);
       await interaction.reply({ embeds: [giveawayPanelEmbed(interaction.guild, active)], components: giveawayPanelButtons(active, interaction.guild.id), ephemeral: true });
+    } else if (interaction.commandName === 'guessnumber') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置猜数字。', ephemeral: true });
+        return;
+      }
+      const subcommand = interaction.options.getSubcommand();
+      const key = `${interaction.guild.id}:${interaction.channel.id}`;
+      const oldGame = settings.guessNumberGames[key];
+      if (subcommand === 'cancel') {
+        if (!oldGame || oldGame.status !== 'active') {
+          await interaction.reply({ content: '当前频道没有进行中的猜数字游戏。', ephemeral: true });
+          return;
+        }
+        oldGame.status = 'cancelled';
+        const oldMessage = await interaction.channel.messages.fetch(oldGame.messageId).catch(() => null);
+        if (oldMessage) await oldMessage.edit({ embeds: [guessNumberEmbed(oldGame, true)], components: [] }).catch(() => {});
+        saveSettings();
+        await interaction.reply({ content: '当前频道的猜数字游戏已取消。', ephemeral: true });
+        return;
+      }
+      const min = interaction.options.getInteger('min');
+      const max = interaction.options.getInteger('max');
+      if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max) || min < 0 || max > 1_000_000 || min >= max) {
+        await interaction.reply({ content: '范围无效：最小数字必须小于最大数字，范围只能是 0 至 1,000,000。', ephemeral: true });
+        return;
+      }
+      if (oldGame?.status === 'active') {
+        oldGame.status = 'replaced';
+        const oldMessage = await interaction.channel.messages.fetch(oldGame.messageId).catch(() => null);
+        if (oldMessage) await oldMessage.edit({ embeds: [guessNumberEmbed(oldGame, true)], components: [] }).catch(() => {});
+      }
+      const game = {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        guildId: interaction.guild.id,
+        channelId: interaction.channel.id,
+        min,
+        max,
+        answer: Math.floor(Math.random() * (max - min + 1)) + min,
+        hostId: interaction.user.id,
+        hostName: interaction.user.tag,
+        status: 'active',
+        createdAt: Date.now(),
+        messageId: '',
+      };
+      const message = await interaction.channel.send({ embeds: [guessNumberEmbed(game)], components: guessNumberComponents(game) });
+      game.messageId = message.id;
+      settings.guessNumberGames[key] = game;
+      saveSettings();
+      await interaction.reply({ content: `猜数字游戏已设置，当前频道范围为 **${min} 至 ${max}**。`, ephemeral: true });
     } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(interaction.commandName)) {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。' });
@@ -1727,6 +1811,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       await performModeration(interaction, interaction.commandName);
     }
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('guess_number_try:')) {
+    const game = Object.values(settings.guessNumberGames).find((item) => item.id === interaction.customId.split(':')[1]);
+    if (!game || game.guildId !== interaction.guild.id || game.channelId !== interaction.channel.id || game.status !== 'active') {
+      await interaction.reply({ content: '这轮猜数字已经结束或不存在。', ephemeral: true });
+      return;
+    }
+    await interaction.showModal(guessNumberModal(game));
     return;
   }
 
@@ -1930,6 +2024,37 @@ client.on(Events.InteractionCreate, async (interaction) => {
     ticket.closed = false;
     saveSettings();
     await channel.send({ content: '工单已再次开启，合作代表可以继续查看和发言。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`partner_ticket_close:${ticket.channelId}`).setLabel('关单').setStyle(ButtonStyle.Danger))] });
+    return;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('guess_number_modal:')) {
+    const gameId = interaction.customId.split(':')[1];
+    const game = Object.values(settings.guessNumberGames).find((item) => item.id === gameId);
+    if (!game || game.guildId !== interaction.guild.id || game.channelId !== interaction.channel.id || game.status !== 'active') {
+      await interaction.reply({ content: '这轮猜数字已经结束或不存在。', ephemeral: true });
+      return;
+    }
+    const guessText = interaction.fields.getTextInputValue('guess').trim();
+    const guess = Number(guessText);
+    if (!/^[-+]?\d+$/.test(guessText) || !Number.isSafeInteger(guess) || guess < game.min || guess > game.max) {
+      await interaction.reply({ content: `请输入 ${game.min} 至 ${game.max} 范围内的整数。`, ephemeral: true });
+      return;
+    }
+    if (guess < game.answer) {
+      await interaction.reply({ content: '猜小了，再试一次。', ephemeral: true });
+      return;
+    }
+    if (guess > game.answer) {
+      await interaction.reply({ content: '猜大了，再试一次。', ephemeral: true });
+      return;
+    }
+    game.status = 'ended';
+    game.winnerId = interaction.user.id;
+    game.endedAt = Date.now();
+    saveSettings();
+    const publicMessage = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
+    if (publicMessage) await publicMessage.edit({ embeds: [guessNumberEmbed(game, true, interaction.user.id)], components: [] }).catch(() => {});
+    await interaction.reply({ content: `恭喜你答对了！正确数字是 **${game.answer}**。`, ephemeral: true });
     return;
   }
 
