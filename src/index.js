@@ -718,28 +718,66 @@ function giveawayButtons(giveaway, disabled = false) {
 function guessNumberEmbed(game, ended = false, winner = null) {
   const description = ended
     ? `本轮猜数字已经结束。${winner ? `\n答对成员：<@${winner}>\n正确数字：**${game.answer}**` : `\n正确数字：**${game.answer}**`}`
-    : `管理员已经在本频道设置猜数字范围：**${game.min} 至 ${game.max}**\n\n点击下方按钮输入你猜的数字。每位成员可以持续尝试，直到有人猜中。`;
+    : `请在 <#${game.channelId}> 直接发送你要猜的整数。\n\n每一条符合格式的数字消息都会计入本轮猜测，答对后会公开显示结果。`;
   return new EmbedBuilder()
     .setColor(ended ? 0x57f287 : 0x5865f2)
     .setTitle(ended ? '猜数字结果' : '猜数字游戏')
     .setDescription(description)
     .addFields(
-      { name: '猜数字范围', value: `${game.min} 至 ${game.max}`, inline: true },
+      { name: '指定频道', value: `<#${game.channelId}>`, inline: true },
       { name: '状态', value: ended ? '已结束' : '进行中', inline: true },
+      { name: '累计猜测', value: String(game.guessCount || 0), inline: true },
     )
     .setFooter({ text: `出题管理员：${game.hostName}` })
     .setTimestamp(new Date(game.createdAt));
 }
 
-function guessNumberComponents(game, disabled = false) {
-  return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`guess_number_try:${game.id}`).setLabel('我要猜数字').setStyle(ButtonStyle.Primary).setDisabled(disabled),
-  )];
+function guessNumberAdminEmbed(guild, game) {
+  const active = game?.status === 'active';
+  const hints = (game?.hints || []).filter(Boolean).map((hint, index) => `${index + 1}. ${hint.text} · ${hint.trigger === 'time' ? `${hint.value} 秒后` : hint.trigger === 'people' ? `${hint.value} 位不同成员后` : `${hint.value} 次猜测后`}${hint.sent ? '（已发送）' : ''}`);
+  return new EmbedBuilder()
+    .setColor(active ? 0x57f287 : 0x5865f2)
+    .setTitle('猜数字管理面板')
+    .setDescription('所有设置都在这个指令的私密面板中完成；成员必须在指定频道直接发送数字，其他频道的数字不会计入。')
+    .addFields(
+      { name: '猜数字频道', value: game?.channelId ? `<#${game.channelId}>` : '未设置', inline: true },
+      { name: '正确数字', value: game?.answer !== undefined ? '已设置（管理员可见）' : '未设置', inline: true },
+      { name: '游戏状态', value: active ? '进行中' : '未开始', inline: true },
+      { name: '自定义提示', value: hints.length ? hints.join('\n').slice(0, 1024) : '尚未设置', inline: false },
+    )
+    .setFooter({ text: `${guild.name} · 最多设置 5 个提示` });
 }
 
-function guessNumberModal(game) {
-  return new ModalBuilder().setCustomId(`guess_number_modal:${game.id}`).setTitle(`猜数字（${game.min}-${game.max}）`).addComponents(
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guess').setLabel(`请输入 ${game.min} 至 ${game.max} 的整数`).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20)),
+function guessNumberAdminComponents(game) {
+  const rows = [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('guess_number_set_channel').setLabel('设置猜数字频道').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('guess_number_set_answer').setLabel('设置正确数字').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('guess_number_refresh').setLabel('刷新面板').setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      ...[1, 2, 3, 4, 5].map((slot) => new ButtonBuilder().setCustomId(`guess_number_hint:${slot}`).setLabel(`设置提示 ${slot}`).setStyle(ButtonStyle.Secondary)),
+    ),
+  ];
+  if (game?.status === 'active') {
+    rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_number_stop').setLabel('结束猜数字').setStyle(ButtonStyle.Danger)));
+  } else {
+    rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('guess_number_start').setLabel('开始猜数字').setStyle(ButtonStyle.Success)));
+  }
+  return rows;
+}
+
+function guessNumberAnswerModal() {
+  return new ModalBuilder().setCustomId('guess_number_answer_modal').setTitle('设置猜数字正确数字').addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('answer').setLabel('正确数字（仅管理员可见）').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20)),
+  );
+}
+
+function guessNumberHintModal(game, slot) {
+  return new ModalBuilder().setCustomId(`guess_number_hint_modal:${slot}`).setTitle(`设置第 ${slot} 个自定义提示`).addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text').setLabel('提示内容（公开大字显示）').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('trigger').setLabel('触发方式：time / people / guesses').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('time、people 或 guesses').setMaxLength(10)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('value').setLabel('触发数值').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('例如：60、5、10').setMaxLength(8)),
   );
 }
 
@@ -748,16 +786,8 @@ function guessNumberHintEmbed(game, hint, index) {
     .setColor(0xfee75c)
     .setTitle(`💡 猜数字提示 ${index + 1}`)
     .setDescription(`# ${hint.text}`)
-    .addFields({ name: '当前范围', value: `${game.min} 至 ${game.max}`, inline: true })
-    .setFooter({ text: '请继续点击按钮提交你的猜测' });
-}
-
-function guessNumberHintModal(game, slot, trigger) {
-  const triggerLabel = trigger === 'time' ? '延迟秒数' : trigger === 'people' ? '不同猜测人数' : '累计猜测次数';
-  return new ModalBuilder().setCustomId(`guess_number_hint_modal:${game.id}:${slot}:${trigger}`).setTitle(`设置第 ${slot} 个提示`).addComponents(
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text').setLabel('提示内容（公开大字显示）').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)),
-    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('value').setLabel(triggerLabel).setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder(trigger === 'time' ? '例如：60' : '例如：5').setMaxLength(8)),
-  );
+    .addFields({ name: '指定频道', value: `<#${game.channelId}>`, inline: true })
+    .setFooter({ text: '请在指定频道发送你的数字猜测' });
 }
 
 async function sendGuessNumberHint(game, hint, index) {
@@ -1391,20 +1421,7 @@ const commands = [
     .addSubcommand((subcommand) => subcommand.setName('cancel').setDescription('取消置底消息。')
       .addBooleanOption((option) => option.setName('all_channels').setDescription('是否取消所有频道的置底。').setRequired(false))),
   new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
-  new SlashCommandBuilder()
-    .setName('guessnumber').setDescription('设置或取消当前频道的猜数字游戏。')
-    .addSubcommand((subcommand) => subcommand.setName('set').setDescription('在当前频道设置猜数字范围。')
-      .addIntegerOption((option) => option.setName('min').setDescription('最小数字。').setRequired(true))
-      .addIntegerOption((option) => option.setName('max').setDescription('最大数字。').setRequired(true)))
-    .addSubcommand((subcommand) => subcommand.setName('cancel').setDescription('结束当前频道的猜数字游戏。')),
-  new SlashCommandBuilder()
-    .setName('guesshint').setDescription('设置当前频道的猜数字提示。')
-    .addIntegerOption((option) => option.setName('number').setDescription('第几个提示，1 至 5。').setRequired(true).setMinValue(1).setMaxValue(5))
-    .addStringOption((option) => option.setName('trigger').setDescription('提示触发方式。').setRequired(true).addChoices(
-      { name: '经过时间（秒）', value: 'time' },
-      { name: '不同成员猜测人数', value: 'people' },
-      { name: '累计猜测次数', value: 'guesses' },
-    )),
+  new SlashCommandBuilder().setName('guessnumber').setDescription('打开猜数字管理员设置面板。'),
   new SlashCommandBuilder()
     .setName('mute').setDescription('暂时禁言一名成员。')
     .addUserOption((option) => option.setName('member').setDescription('要禁言的成员。').setRequired(true))
@@ -1453,8 +1470,33 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildPresences],
 });
 
+async function handleGuessNumberMessage(message) {
+  const game = settings.guessNumberGames[message.guild.id];
+  if (!game || game.status !== 'active' || game.channelId !== message.channel.id || !/^[+-]?\d+$/.test(message.content.trim())) return;
+  const guess = Number(message.content.trim());
+  if (!Number.isSafeInteger(guess)) return;
+  game.guessCount = (game.guessCount || 0) + 1;
+  game.guesserIds ||= [];
+  if (!game.guesserIds.includes(message.author.id)) game.guesserIds.push(message.author.id);
+  if (guess === game.answer) {
+    game.status = 'ended';
+    game.winnerId = message.author.id;
+    game.endedAt = Date.now();
+    for (const timer of guessHintTimers.get(game.id) || []) clearTimeout(timer);
+    saveSettings();
+    const publicMessage = await message.channel.messages.fetch(game.messageId).catch(() => null);
+    if (publicMessage) await publicMessage.edit({ embeds: [guessNumberEmbed(game, true, message.author.id)], components: [] }).catch(() => {});
+    else await message.channel.send({ embeds: [guessNumberEmbed(game, true, message.author.id)] }).catch(() => {});
+    await message.react('🎉').catch(() => {});
+    return;
+  }
+  saveSettings();
+  await checkGuessNumberCountHints(game);
+}
+
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot) return;
+  handleGuessNumberMessage(message).catch((error) => console.error('Guess number message error:', error));
   const moderationConfig = getGuildSettings(message.guild.id);
   const prefix = moderationConfig.moderationPrefix || '!';
   if (message.content.startsWith(prefix)) {
@@ -1743,7 +1785,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 设置当前频道猜数字游戏\n`/guesshint` — 设置最多五个自定义猜数字提示\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 打开猜数字管理面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
@@ -1819,68 +1861,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置猜数字。', ephemeral: true });
         return;
       }
-      const subcommand = interaction.options.getSubcommand();
-      const key = `${interaction.guild.id}:${interaction.channel.id}`;
-      const oldGame = settings.guessNumberGames[key];
-      if (subcommand === 'cancel') {
-        if (!oldGame || oldGame.status !== 'active') {
-          await interaction.reply({ content: '当前频道没有进行中的猜数字游戏。', ephemeral: true });
-          return;
-        }
-        oldGame.status = 'cancelled';
-        const oldMessage = await interaction.channel.messages.fetch(oldGame.messageId).catch(() => null);
-        if (oldMessage) await oldMessage.edit({ embeds: [guessNumberEmbed(oldGame, true)], components: [] }).catch(() => {});
-        saveSettings();
-        await interaction.reply({ content: '当前频道的猜数字游戏已取消。', ephemeral: true });
-        return;
-      }
-      const min = interaction.options.getInteger('min');
-      const max = interaction.options.getInteger('max');
-      if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max) || min < 0 || max > 1_000_000 || min >= max) {
-        await interaction.reply({ content: '范围无效：最小数字必须小于最大数字，范围只能是 0 至 1,000,000。', ephemeral: true });
-        return;
-      }
-      if (oldGame?.status === 'active') {
-        oldGame.status = 'replaced';
-        const oldMessage = await interaction.channel.messages.fetch(oldGame.messageId).catch(() => null);
-        if (oldMessage) await oldMessage.edit({ embeds: [guessNumberEmbed(oldGame, true)], components: [] }).catch(() => {});
-      }
-      const game = {
-        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-        guildId: interaction.guild.id,
-        channelId: interaction.channel.id,
-        min,
-        max,
-        answer: Math.floor(Math.random() * (max - min + 1)) + min,
-        hostId: interaction.user.id,
-        hostName: interaction.user.tag,
-        status: 'active',
-        createdAt: Date.now(),
-        messageId: '',
-        guessCount: 0,
-        guesserIds: [],
-        hints: [],
-      };
-      const message = await interaction.channel.send({ embeds: [guessNumberEmbed(game)], components: guessNumberComponents(game) });
-      game.messageId = message.id;
-      settings.guessNumberGames[key] = game;
-      saveSettings();
-      scheduleGuessNumberHints(game);
-      await interaction.reply({ content: `猜数字游戏已设置，当前频道范围为 **${min} 至 ${max}**。`, ephemeral: true });
-    } else if (interaction.commandName === 'guesshint') {
-      if (!(await canManage(interaction))) {
-        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置猜数字提示。', ephemeral: true });
-        return;
-      }
-      const key = `${interaction.guild.id}:${interaction.channel.id}`;
-      const game = settings.guessNumberGames[key];
-      if (!game || game.status !== 'active') {
-        await interaction.reply({ content: '当前频道没有进行中的猜数字游戏，请先使用 `/guessnumber set`。', ephemeral: true });
-        return;
-      }
-      const slot = interaction.options.getInteger('number');
-      const trigger = interaction.options.getString('trigger');
-      await interaction.showModal(guessNumberHintModal(game, slot, trigger));
+      const game = settings.guessNumberGames[interaction.guild.id];
+      await interaction.reply({ embeds: [guessNumberAdminEmbed(interaction.guild, game)], components: guessNumberAdminComponents(game), ephemeral: true });
     } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(interaction.commandName)) {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。' });
@@ -1891,14 +1873,50 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  if (interaction.isButton() && interaction.customId.startsWith('guess_number_try:')) {
-    const game = Object.values(settings.guessNumberGames).find((item) => item.id === interaction.customId.split(':')[1]);
-    if (!game || game.guildId !== interaction.guild.id || game.channelId !== interaction.channel.id || game.status !== 'active') {
-      await interaction.reply({ content: '这轮猜数字已经结束或不存在。', ephemeral: true });
+  if (interaction.isButton() && interaction.customId.startsWith('guess_number_')) {
+    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以设置猜数字。', ephemeral: true }); return; }
+    const guildId = interaction.guild.id;
+    const game = settings.guessNumberGames[guildId];
+    if (interaction.customId === 'guess_number_set_channel') {
+      const menu = new ChannelSelectMenuBuilder().setCustomId('guess_number_channel_select').setPlaceholder('选择成员发送数字的专用频道').setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setMinValues(1).setMaxValues(1);
+      await interaction.reply({ content: '请选择猜数字专用频道，只有该频道中发送的整数才会计入。', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
       return;
     }
-    await interaction.showModal(guessNumberModal(game));
-    return;
+    if (interaction.customId === 'guess_number_set_answer') {
+      await interaction.showModal(guessNumberAnswerModal());
+      return;
+    }
+    if (interaction.customId.startsWith('guess_number_hint:')) {
+      await interaction.showModal(guessNumberHintModal(game, Number(interaction.customId.split(':')[1])));
+      return;
+    }
+    if (interaction.customId === 'guess_number_refresh') {
+      await interaction.update({ embeds: [guessNumberAdminEmbed(interaction.guild, game)], components: guessNumberAdminComponents(game) });
+      return;
+    }
+    if (interaction.customId === 'guess_number_stop') {
+      if (!game || game.status !== 'active') { await interaction.reply({ content: '当前没有进行中的猜数字。', ephemeral: true }); return; }
+      game.status = 'cancelled';
+      for (const timer of guessHintTimers.get(game.id) || []) clearTimeout(timer);
+      const publicMessage = await interaction.guild.channels.fetch(game.channelId).then((channel) => channel?.messages.fetch(game.messageId)).catch(() => null);
+      if (publicMessage) await publicMessage.edit({ embeds: [guessNumberEmbed(game, true)], components: [] }).catch(() => {});
+      saveSettings();
+      await interaction.update({ embeds: [guessNumberAdminEmbed(interaction.guild, game)], components: guessNumberAdminComponents(game) });
+      return;
+    }
+    if (interaction.customId === 'guess_number_start') {
+      if (!game?.channelId || !Number.isSafeInteger(game.answer)) { await interaction.reply({ content: '请先设置猜数字频道和正确数字。', ephemeral: true }); return; }
+      if (game.status === 'active') { await interaction.reply({ content: '当前已经有一轮猜数字进行中。', ephemeral: true }); return; }
+      const channel = await interaction.guild.channels.fetch(game.channelId).catch(() => null);
+      if (!channel?.isTextBased?.()) { await interaction.reply({ content: '指定频道不存在或无法发送消息。', ephemeral: true }); return; }
+      Object.assign(game, { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, guildId, hostId: interaction.user.id, hostName: interaction.user.tag, status: 'active', createdAt: Date.now(), messageId: '', guessCount: 0, guesserIds: [], hints: (game.hints || []).filter(Boolean).map((hint) => ({ ...hint, sent: false })) });
+      const publicMessage = await channel.send({ embeds: [guessNumberEmbed(game)] });
+      game.messageId = publicMessage.id;
+      saveSettings();
+      scheduleGuessNumberHints(game);
+      await interaction.update({ embeds: [guessNumberAdminEmbed(interaction.guild, game)], components: guessNumberAdminComponents(game) });
+      return;
+    }
   }
 
   if (interaction.isButton() && interaction.customId.startsWith('role_toggle:')) {
@@ -2104,58 +2122,41 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  if (interaction.isModalSubmit() && interaction.customId.startsWith('guess_number_hint_modal:')) {
-    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以设置猜数字提示。', ephemeral: true }); return; }
-    const [, gameId, slotText, trigger] = interaction.customId.split(':');
-    const game = Object.values(settings.guessNumberGames).find((item) => item.id === gameId);
-    const slot = Number(slotText);
-    const text = interaction.fields.getTextInputValue('text').trim();
-    const value = Number(interaction.fields.getTextInputValue('value').trim());
-    const maxValue = trigger === 'time' ? 604800 : 100000;
-    if (!game || game.guildId !== interaction.guild.id || game.channelId !== interaction.channel.id || game.status !== 'active') {
-      await interaction.reply({ content: '这轮猜数字已经结束或不存在。', ephemeral: true }); return;
-    }
-    if (!text || !Number.isInteger(value) || value < 1 || value > maxValue) {
-      await interaction.reply({ content: `提示触发数值无效，必须是 1 至 ${maxValue} 的整数。`, ephemeral: true }); return;
-    }
+  if (interaction.isModalSubmit() && interaction.customId === 'guess_number_answer_modal') {
+    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以设置猜数字。', ephemeral: true }); return; }
+    const game = settings.guessNumberGames[interaction.guild.id] || { guildId: interaction.guild.id, status: 'draft', hints: [] };
+    if (game.status === 'active') { await interaction.reply({ content: '当前猜数字正在进行中，请先结束本轮再修改正确数字。', ephemeral: true }); return; }
+    const answerText = interaction.fields.getTextInputValue('answer').trim();
+    const answer = Number(answerText);
+    if (!/^[+-]?\d+$/.test(answerText) || !Number.isSafeInteger(answer)) { await interaction.reply({ content: '正确数字必须是有效整数。', ephemeral: true }); return; }
+    game.answer = answer;
+    game.guildId = interaction.guild.id;
+    game.status = 'draft';
     game.hints ||= [];
-    game.hints[slot - 1] = { text, trigger, value, sent: false };
+    settings.guessNumberGames[interaction.guild.id] = game;
     saveSettings();
-    scheduleGuessNumberHints(game);
-    await checkGuessNumberCountHints(game);
-    await interaction.reply({ content: `第 ${slot} 个提示已保存，将在${trigger === 'time' ? `${value} 秒后` : trigger === 'people' ? `${value} 位不同成员猜测后` : `${value} 次猜测后`}公开显示。`, ephemeral: true });
+    await interaction.reply({ content: '正确数字已保存，只有机器人和管理员面板可见。请设置频道后点击“开始猜数字”。', ephemeral: true });
     return;
   }
 
-  if (interaction.isModalSubmit() && interaction.customId.startsWith('guess_number_modal:')) {
-    const gameId = interaction.customId.split(':')[1];
-    const game = Object.values(settings.guessNumberGames).find((item) => item.id === gameId);
-    if (!game || game.guildId !== interaction.guild.id || game.channelId !== interaction.channel.id || game.status !== 'active') {
-      await interaction.reply({ content: '这轮猜数字已经结束或不存在。', ephemeral: true });
-      return;
-    }
-    const guessText = interaction.fields.getTextInputValue('guess').trim();
-    const guess = Number(guessText);
-    if (!/^[-+]?\d+$/.test(guessText) || !Number.isSafeInteger(guess) || guess < game.min || guess > game.max) {
-      await interaction.reply({ content: `请输入 ${game.min} 至 ${game.max} 范围内的整数。`, ephemeral: true });
-      return;
-    }
-    game.guessCount = (game.guessCount || 0) + 1;
-    game.guesserIds ||= [];
-    if (!game.guesserIds.includes(interaction.user.id)) game.guesserIds.push(interaction.user.id);
-    if (guess !== game.answer) {
-      saveSettings();
-      await checkGuessNumberCountHints(game);
-      await interaction.reply({ content: '这次猜测不正确，请继续尝试。', ephemeral: true });
-      return;
-    }
-    game.status = 'ended';
-    game.winnerId = interaction.user.id;
-    game.endedAt = Date.now();
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('guess_number_hint_modal:')) {
+    if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以设置猜数字提示。', ephemeral: true }); return; }
+    const slot = Number(interaction.customId.split(':')[1]);
+    const game = settings.guessNumberGames[interaction.guild.id] || { guildId: interaction.guild.id, status: 'draft', hints: [] };
+    if (game.status === 'active') { await interaction.reply({ content: '当前猜数字正在进行中，请先结束本轮再修改提示。', ephemeral: true }); return; }
+    const text = interaction.fields.getTextInputValue('text').trim();
+    const rawTrigger = interaction.fields.getTextInputValue('trigger').trim().toLowerCase();
+    const trigger = ({ 秒: 'time', 时间: 'time', time: 'time', 人数: 'people', 成员: 'people', people: 'people', 次数: 'guesses', 猜测: 'guesses', guesses: 'guesses' })[rawTrigger];
+    const value = Number(interaction.fields.getTextInputValue('value').trim());
+    const maxValue = trigger === 'time' ? 604800 : 100000;
+    if (!text || !trigger || !Number.isInteger(value) || value < 1 || value > maxValue) { await interaction.reply({ content: '提示内容、触发方式或数值无效。触发方式请填写 `time`、`people` 或 `guesses`，数值必须是有效正整数。', ephemeral: true }); return; }
+    game.guildId = interaction.guild.id;
+    game.status = 'draft';
+    game.hints ||= [];
+    game.hints[slot - 1] = { text, trigger, value, sent: false };
+    settings.guessNumberGames[interaction.guild.id] = game;
     saveSettings();
-    const publicMessage = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
-    if (publicMessage) await publicMessage.edit({ embeds: [guessNumberEmbed(game, true, interaction.user.id)], components: [] }).catch(() => {});
-    await interaction.reply({ content: `恭喜你答对了！正确数字是 **${game.answer}**。`, ephemeral: true });
+    await interaction.reply({ content: `第 ${slot} 个自定义提示已保存。开始游戏后会按设定条件公开发送。`, ephemeral: true });
     return;
   }
 
@@ -2534,6 +2535,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isChannelSelectMenu()) {
+    if (interaction.customId === 'guess_number_channel_select') {
+      if (!(await canManage(interaction))) { await interaction.reply({ content: '只有管理员可以设置猜数字频道。', ephemeral: true }); return; }
+      const game = settings.guessNumberGames[interaction.guild.id] || { guildId: interaction.guild.id, status: 'draft', hints: [] };
+      if (game.status === 'active') { await interaction.update({ content: '当前猜数字正在进行中，请先结束本轮再更换专用频道。', components: [] }); return; }
+      game.guildId = interaction.guild.id;
+      game.channelId = interaction.values[0];
+      settings.guessNumberGames[interaction.guild.id] = game;
+      saveSettings();
+      await interaction.update({ content: `猜数字专用频道已设置为 <#${interaction.values[0]}>。请回到猜数字管理面板并点击刷新。`, components: [] });
+      return;
+    }
     if (interaction.customId === 'sponsor_giveaway_review_channel_select') {
       config.sponsorGiveaway.reviewChannelId = interaction.values[0];
       saveSettings();
