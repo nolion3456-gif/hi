@@ -63,6 +63,7 @@ if (!settings.partnerApplications) settings.partnerApplications = {};
 if (!settings.partnerTickets) settings.partnerTickets = {};
 if (!settings.sponsorGiveaways) settings.sponsorGiveaways = {};
 if (!settings.guessNumberGames) settings.guessNumberGames = {};
+if (!settings.autoReactions) settings.autoReactions = {};
 
 function saveSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
@@ -1423,6 +1424,12 @@ const commands = [
   new SlashCommandBuilder().setName('giveaway').setDescription('打开私密抽奖管理面板。'),
   new SlashCommandBuilder().setName('guessnumber').setDescription('打开猜数字管理员设置面板。'),
   new SlashCommandBuilder()
+    .setName('autoreaction').setDescription('设置当前频道的自动表情反应。')
+    .addSubcommand((subcommand) => subcommand.setName('set').setDescription('启用当前频道的自动表情。')
+      .addStringOption((option) => option.setName('emojis').setDescription('表情，可用空格、逗号分隔，最多 10 个。').setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('show').setDescription('查看当前频道的自动表情设置。'))
+    .addSubcommand((subcommand) => subcommand.setName('cancel').setDescription('取消当前频道的自动表情。')),
+  new SlashCommandBuilder()
     .setName('mute').setDescription('暂时禁言一名成员。')
     .addUserOption((option) => option.setName('member').setDescription('要禁言的成员。').setRequired(true))
     .addStringOption((option) => option.setName('duration').setDescription('时长，例如 10m、2h、7d，最长28天。').setRequired(true))
@@ -1494,9 +1501,22 @@ async function handleGuessNumberMessage(message) {
   await checkGuessNumberCountHints(game);
 }
 
+function parseAutoReactionEmojis(value) {
+  return [...new Set(String(value || '').split(/[\s,，、]+/).map((emoji) => emoji.trim()).filter(Boolean))].slice(0, 10);
+}
+
+async function handleAutoReactionMessage(message) {
+  const emojis = settings.autoReactions[message.channel.id];
+  if (!emojis?.length || message.author.bot) return;
+  await Promise.all(emojis.map((emoji) => message.react(emoji).catch((error) => {
+    console.error(`Could not react with ${emoji} in ${message.channel.id}:`, error.message);
+  })));
+}
+
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot) return;
   handleGuessNumberMessage(message).catch((error) => console.error('Guess number message error:', error));
+  handleAutoReactionMessage(message).catch((error) => console.error('Auto reaction error:', error));
   const moderationConfig = getGuildSettings(message.guild.id);
   const prefix = moderationConfig.moderationPrefix || '!';
   if (message.content.startsWith(prefix)) {
@@ -1785,7 +1805,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 打开猜数字管理面板\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 打开猜数字管理面板\n`/autoreaction` — 设置当前频道自动表情\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
@@ -1863,6 +1883,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const game = settings.guessNumberGames[interaction.guild.id];
       await interaction.reply({ embeds: [guessNumberAdminEmbed(interaction.guild, game)], components: guessNumberAdminComponents(game), ephemeral: true });
+    } else if (interaction.commandName === 'autoreaction') {
+      if (!(await canManage(interaction))) {
+        await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置频道自动表情。', ephemeral: true });
+        return;
+      }
+      const subcommand = interaction.options.getSubcommand();
+      const channelId = interaction.channel.id;
+      if (subcommand === 'set') {
+        const emojis = parseAutoReactionEmojis(interaction.options.getString('emojis'));
+        if (!emojis.length) {
+          await interaction.reply({ content: '至少要设置一个表情，例如 `😀 ❤️ 👍`。', ephemeral: true });
+          return;
+        }
+        settings.autoReactions[channelId] = emojis;
+        saveSettings();
+        await interaction.reply({ content: `已开启当前频道的自动表情。每条成员消息都会尝试添加：${emojis.join(' ')}`, ephemeral: true });
+      } else if (subcommand === 'show') {
+        const emojis = settings.autoReactions[channelId] || [];
+        await interaction.reply({ content: emojis.length ? `当前频道自动表情：${emojis.join(' ')}` : '当前频道尚未设置自动表情。', ephemeral: true });
+      } else {
+        delete settings.autoReactions[channelId];
+        saveSettings();
+        await interaction.reply({ content: '已取消当前频道的自动表情。', ephemeral: true });
+      }
     } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(interaction.commandName)) {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。' });
