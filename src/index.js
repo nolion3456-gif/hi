@@ -66,7 +66,9 @@ if (!settings.guessNumberGames) settings.guessNumberGames = {};
 if (!settings.autoReactions) settings.autoReactions = {};
 
 function saveSettings() {
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  const tempPath = `${settingsPath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(settings, null, 2), 'utf8');
+  fs.renameSync(tempPath, settingsPath);
 }
 
 function getStickySettings(guildId) {
@@ -116,6 +118,7 @@ async function refreshStickyForMessage(message) {
     if (stickyLocks.has(message.channel.id)) return;
     stickyLocks.add(message.channel.id);
     try { await publishStickyToChannel(message.guild, message.channel, content); }
+    catch (error) { console.error('Sticky timer error:', error); }
     finally { stickyLocks.delete(message.channel.id); }
   }, delay));
 }
@@ -693,7 +696,7 @@ function giveawayEmbed(giveaway, ended = false) {
   if (giveaway.messageRequirement) requirements.push(`本服务器至少发送 **${giveaway.messageRequirement} 条消息**`);
   if (giveaway.levelRequirement) requirements.push(`等级至少 **${giveaway.levelRequirement}**`);
   if (giveaway.bypassRoleIds?.length) requirements.push(`绕过条件身份组：${giveaway.bypassRoleIds.map((id) => `<@&${id}>`).join('、')}`);
-  if (giveaway.extraEntries?.length) requirements.push(`额外入场：${giveaway.extraEntries.map((item) => `<@&${item.roleId}> +${item.entries} 次`).join('、')}`);
+  if (giveaway.extraEntries?.length) requirements.push(`额外入场票：${giveaway.extraEntries.map((item) => `<@&${item.roleId}> **+${item.entries}**`).join(' · ')}`);
   if (giveaway.firstEntries) requirements.push(`前 **${giveaway.firstEntries}** 位参加者直接获奖`);
   if (giveaway.conditionsText) requirements.push(`赞助者设置条件：${giveaway.conditionsText}`);
   const winnerText = giveaway.winnerIds?.length ? `\n\n获奖者：${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')}` : '';
@@ -703,8 +706,8 @@ function giveawayEmbed(giveaway, ended = false) {
     .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
     .addFields(
       { name: '获奖人数', value: String(giveaway.winnerCount), inline: true },
-      { name: '参与人数', value: String(giveaway.entries.length), inline: true },
-      { name: '总入场次数', value: String(giveaway.entryWeights || giveaway.entries.length), inline: true },
+      { name: '参加人数', value: String(giveaway.entries.length), inline: true },
+      { name: '总入场票', value: String(giveaway.entryWeights || giveaway.entries.length), inline: true },
       { name: ended ? '结束时间' : '结束倒计时', value: ended ? `<t:${Math.floor(giveaway.endsAt / 1000)}:F>` : `<t:${Math.floor(giveaway.endsAt / 1000)}:R>`, inline: true },
     )
     .setFooter({ text: `主办人：${giveaway.hostName} · 抽奖 ID：${giveaway.id}` })
@@ -830,7 +833,7 @@ function scheduleGuessNumberHints(game) {
   (game.hints || []).forEach((hint, index) => {
     if (hint.sent || hint.trigger !== 'time') return;
     const delay = Math.max(0, Number(hint.value) * 1000 - (Date.now() - game.createdAt));
-    timers.push(setTimeout(() => sendGuessNumberHint(game, hint, index), delay));
+    timers.push(setTimeout(() => sendGuessNumberHint(game, hint, index).catch((error) => console.error('Guess hint timer error:', error)), delay));
   });
   guessHintTimers.set(game.id, timers);
 }
@@ -1181,6 +1184,17 @@ async function updateGiveawayClaimPanel(giveaway, expired = false) {
   if (message) await message.edit({ embeds: [giveawayClaimEmbed(giveaway, expired)], components: giveawayClaimComponents(giveaway, expired) }).catch(() => {});
 }
 
+async function deleteGiveawayMessages(giveaway) {
+  const guild = await client.guilds.fetch(giveaway.guildId).catch(() => null);
+  const channel = guild && await guild.channels.fetch(giveaway.channelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return;
+  const messageIds = [...new Set([giveaway.messageId, giveaway.claimMessageId].filter(Boolean))];
+  await Promise.all(messageIds.map(async (messageId) => {
+    const message = await channel.messages.fetch(messageId).catch(() => null);
+    if (message) await message.delete().catch((error) => console.error(`Could not delete giveaway message ${messageId}:`, error.message));
+  }));
+}
+
 async function completeGiveawayClaim(giveaway, userId) {
   if (!giveaway.winnerIds?.includes(userId)) return false;
   giveaway.claimedWinnerIds ||= [];
@@ -1196,7 +1210,7 @@ function scheduleGiveawayClaimDeadline(giveaway) {
   if (giveawayClaimTimers.has(giveaway.id)) clearTimeout(giveawayClaimTimers.get(giveaway.id));
   if (!giveaway.claimDeadline || giveaway.status !== 'ended') return;
   const delay = Math.max(1000, giveaway.claimDeadline - Date.now());
-  giveawayClaimTimers.set(giveaway.id, setTimeout(() => handleGiveawayClaimDeadline(giveaway.id), Math.min(delay, 2_147_000_000)));
+  giveawayClaimTimers.set(giveaway.id, setTimeout(() => handleGiveawayClaimDeadline(giveaway.id).catch((error) => console.error('Giveaway claim timer error:', error)), Math.min(delay, 2_147_000_000)));
 }
 
 async function handleGiveawayClaimDeadline(giveawayId) {
@@ -1274,7 +1288,7 @@ async function finishGiveaway(giveawayId, reroll = false, firstCome = false) {
 
 function scheduleGiveaway(giveaway) {
   const delay = Math.max(1000, giveaway.endsAt - Date.now());
-  giveawayTimers.set(giveaway.id, setTimeout(() => finishGiveaway(giveaway.id), Math.min(delay, 2_147_000_000)));
+  giveawayTimers.set(giveaway.id, setTimeout(() => finishGiveaway(giveaway.id).catch((error) => console.error('Giveaway timer error:', error)), Math.min(delay, 2_147_000_000)));
 }
 
 function textModal(customId, title, label, value, paragraph = false) {
@@ -1923,11 +1937,36 @@ async function performPrefixModeration(message, action, args) {
   } catch (error) { console.error(`Prefix ${action} failed:`, error); await message.reply(`执行 ${config.moderationPrefix}${action} 失败，请检查 Bot 权限和身份组层级。`); }
 }
 
+client.on(Events.Error, (error) => console.error('Discord client error:', error));
+client.on(Events.Warn, (message) => console.warn('Discord client warning:', message));
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.warn(`Received ${signal}; saving data before shutdown.`);
+  try { saveSettings(); } catch (error) { console.error('Could not save data during shutdown:', error); }
+  await client.destroy().catch((error) => console.error('Could not close Discord client:', error));
+  process.exit(0);
+}
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception; the host should restart the bot:', error);
+  try { saveSettings(); } catch (saveError) { console.error('Could not save after uncaught exception:', saveError); }
+  setTimeout(() => process.exit(1), 1000).unref?.();
+});
+process.on('SIGTERM', () => shutdown('SIGTERM').catch((error) => { console.error('Shutdown error:', error); process.exit(1); }));
+process.on('SIGINT', () => shutdown('SIGINT').catch((error) => { console.error('Shutdown error:', error); process.exit(1); }));
+
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.guild || !(await isGuildUsable(interaction.guild))) {
-    await interaction.reply({ content: '这个服务器没有启用此机器人。', ephemeral: true }).catch(() => {});
-    return;
-  }
+  try {
+    if (!interaction.guild || !(await isGuildUsable(interaction.guild))) {
+      await interaction.reply({ content: '这个服务器没有启用此机器人。', ephemeral: true }).catch(() => {});
+      return;
+    }
 
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'ping') {
@@ -2626,11 +2665,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const giveaway = settings.giveaways[giveawayId];
       if (!giveaway) await interaction.reply({ content: '这个抽奖记录不存在。', ephemeral: true });
       else {
+        await interaction.deferUpdate();
+        await deleteGiveawayMessages(giveaway);
         if (giveawayTimers.has(giveawayId)) clearTimeout(giveawayTimers.get(giveawayId));
         if (giveawayClaimTimers.has(giveawayId)) clearTimeout(giveawayClaimTimers.get(giveawayId));
         delete settings.giveaways[giveawayId];
         saveSettings();
-        await interaction.update({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) });
+        await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) });
       }
     } else if (interaction.customId === 'serverstats_setup') {
       await interaction.showModal(serverStatsModal(config.serverStats));
@@ -2908,11 +2949,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await finishGiveaway(giveaway.id, true);
     } else if (action === 'clear') {
       if (!giveaway) { await interaction.reply({ content: '这个抽奖记录不存在。', ephemeral: true }); return; }
+      await interaction.deferUpdate();
+      await deleteGiveawayMessages(giveaway);
       if (giveawayTimers.has(giveawayId)) clearTimeout(giveawayTimers.get(giveawayId));
       if (giveawayClaimTimers.has(giveawayId)) clearTimeout(giveawayClaimTimers.get(giveawayId));
       delete settings.giveaways[giveawayId];
       saveSettings();
-      await interaction.update({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) });
+      await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) });
     }
     if (action === 'end' || action === 'reroll') await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) }).catch(() => {});
     return;
@@ -3185,6 +3228,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     saveSettings();
     await interaction.reply({ content: '已保存设置。请回到原来的私密面板并点击“刷新面板”。', ephemeral: true });
+  }
+  } catch (error) {
+    console.error('Unhandled interaction error:', error);
+    const fallback = '机器人处理这个操作时遇到异常，请稍后重试；如果持续发生，请联系管理员。';
+    if (interaction.deferred || interaction.replied) await interaction.followUp({ content: fallback, ephemeral: true }).catch(() => {});
+    else await interaction.reply({ content: fallback, ephemeral: true }).catch(() => {});
   }
 });
 
