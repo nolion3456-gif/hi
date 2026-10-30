@@ -882,6 +882,24 @@ function giveawayPanelButtons(giveaways, guildId) {
   return rows.slice(0, 5);
 }
 
+async function refreshGiveawayMessage(giveaway, guild = null) {
+  const targetGuild = guild || await client.guilds.fetch(giveaway.guildId).catch(() => null);
+  const channel = targetGuild && await targetGuild.channels.fetch(giveaway.channelId).catch(() => null);
+  if (!channel?.isTextBased?.() || !giveaway.messageId) return false;
+  const message = await channel.messages.fetch(giveaway.messageId).catch(() => null);
+  if (!message) return false;
+  await message.edit({
+    embeds: [giveawayEmbed(giveaway, giveaway.status !== 'active')],
+    components: giveawayButtons(giveaway, giveaway.status !== 'active'),
+  }).catch((error) => console.error(`Could not migrate giveaway message ${giveaway.id}:`, error.message));
+  return true;
+}
+
+async function refreshGuildGiveawayMessages(guild) {
+  const giveaways = Object.values(settings.giveaways).filter((item) => item.guildId === guild.id && item.status !== 'deleted');
+  await Promise.all(giveaways.map((giveaway) => refreshGiveawayMessage(giveaway, guild)));
+}
+
 function sponsorGiveawayPublicComponents() {
   return [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sponsor_giveaway_apply').setLabel('赞助抽奖').setStyle(ButtonStyle.Success))];
 }
@@ -1686,15 +1704,21 @@ client.on(Events.MessageCreate, (message) => {
   }
 });
 
-client.once(Events.ClientReady, (readyClient) => {
+client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready! Logged in as ${readyClient.user.tag}`);
   if (allowedGuildIds.size) console.log(`Restricted to guilds: ${[...allowedGuildIds].join(', ')}`);
   for (const giveaway of Object.values(settings.giveaways)) {
     if (giveaway.status === 'active') {
-      if (Date.now() >= giveaway.endsAt) finishGiveaway(giveaway.id).catch(console.error);
-      else scheduleGiveaway(giveaway);
+      if (Date.now() >= giveaway.endsAt) await finishGiveaway(giveaway.id).catch(console.error);
+      else {
+        scheduleGiveaway(giveaway);
+        await refreshGiveawayMessage(giveaway).catch((error) => console.error('Could not migrate active giveaway:', error));
+      }
     } else if (giveaway.status === 'ended' && giveaway.claimDeadline && Date.now() < giveaway.claimDeadline) {
       scheduleGiveawayClaimDeadline(giveaway);
+      await refreshGiveawayMessage(giveaway).catch((error) => console.error('Could not migrate ended giveaway:', error));
+    } else if (giveaway.status === 'ended') {
+      await refreshGiveawayMessage(giveaway).catch((error) => console.error('Could not migrate ended giveaway:', error));
     }
   }
   for (const game of Object.values(settings.guessNumberGames)) {
@@ -2041,8 +2065,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以创建和管理抽奖。', ephemeral: true });
         return;
       }
+      await interaction.deferReply({ ephemeral: true });
+      await refreshGuildGiveawayMessages(interaction.guild);
       const active = Object.values(settings.giveaways);
-      await interaction.reply({ embeds: [giveawayPanelEmbed(interaction.guild, active)], components: giveawayPanelButtons(active, interaction.guild.id), ephemeral: true });
+      await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, active)], components: giveawayPanelButtons(active, interaction.guild.id) });
     } else if (interaction.commandName === 'guessnumber') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置猜数字。', ephemeral: true });
