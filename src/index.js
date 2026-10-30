@@ -1238,11 +1238,11 @@ async function handleGiveawayClaimDeadline(giveawayId) {
   if (!pending.length) { await updateGiveawayClaimPanel(giveaway, true); return; }
   await updateGiveawayClaimPanel(giveaway, true);
   if (giveaway.autoReroll && giveaway.entries?.length) {
-    await finishGiveaway(giveaway.id, true);
+    await finishGiveaway(giveaway.id, true, false, true);
   }
 }
 
-async function finishGiveaway(giveawayId, reroll = false, firstCome = false) {
+async function finishGiveaway(giveawayId, reroll = false, firstCome = false, preserveClaimed = false) {
   const giveaway = settings.giveaways[giveawayId];
   if (!giveaway) return null;
   if (reroll && giveaway.claimMessageId) await updateGiveawayClaimPanel(giveaway, true);
@@ -1250,7 +1250,7 @@ async function finishGiveaway(giveawayId, reroll = false, firstCome = false) {
   if (!guild) return null;
   const channel = await guild.channels.fetch(giveaway.channelId).catch(() => null);
   const message = channel?.isTextBased() ? await channel.messages.fetch(giveaway.messageId).catch(() => null) : null;
-  const claimedWinnerIds = giveaway.claimedWinnerIds || [];
+  const claimedWinnerIds = preserveClaimed ? (giveaway.claimedWinnerIds || []) : [];
   const basePool = reroll ? giveaway.entries.filter((id) => !giveaway.winnerIds?.includes(id)) : giveaway.entries;
   const pool = firstCome ? basePool : basePool.flatMap((id) => Array(giveaway.entryWeightByUser?.[id] || 1).fill(id));
   if (!pool.length && reroll) return null;
@@ -2683,8 +2683,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       else if (Date.now() - (giveaway.endedAt || giveaway.endsAt) > REROLL_WINDOW_MS) await interaction.reply({ content: '这个抽奖结束已超过 7 天，重抽功能已自动关闭。', ephemeral: true });
       else {
         await interaction.deferUpdate();
-        await finishGiveaway(giveaway.id, true);
-        await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) }).catch(() => {});
+        const result = await finishGiveaway(giveaway.id, true);
+        await interaction.editReply({ content: result ? '重抽已完成。' : '重抽失败：没有可替换的参加者。请先确认有其他成员参加，或增加参加者后再重抽。', embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) }).catch(() => {});
       }
     } else if (interaction.customId.startsWith('giveaway_clear:')) {
       const giveawayId = interaction.customId.split(':')[1];
@@ -2972,7 +2972,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!giveaway || giveaway.status !== 'ended') { await interaction.reply({ content: '只有已经结束的抽奖才能重抽。', ephemeral: true }); return; }
       if (Date.now() - (giveaway.endedAt || giveaway.endsAt) > REROLL_WINDOW_MS) { await interaction.reply({ content: '这个抽奖结束已超过 7 天，重抽功能已自动关闭。', ephemeral: true }); return; }
       await interaction.deferUpdate();
-      await finishGiveaway(giveaway.id, true);
+      const result = await finishGiveaway(giveaway.id, true);
+      await interaction.editReply({ content: result ? '重抽已完成。' : '重抽失败：没有可替换的参加者。请先确认有其他成员参加，或增加参加者后再重抽。', embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) }).catch(() => {});
     } else if (action === 'clear') {
       if (!giveaway) { await interaction.reply({ content: '这个抽奖记录不存在。', ephemeral: true }); return; }
       await interaction.deferUpdate();
@@ -2983,7 +2984,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       saveSettings();
       await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) });
     }
-    if (action === 'end' || action === 'reroll') await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) }).catch(() => {});
+    if (action === 'end') await interaction.editReply({ content: '抽奖已结束。', embeds: [giveawayPanelEmbed(interaction.guild, Object.values(settings.giveaways))], components: giveawayPanelButtons(Object.values(settings.giveaways), interaction.guild.id) }).catch(() => {});
     return;
   }
 
