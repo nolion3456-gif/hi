@@ -687,6 +687,8 @@ function formatDuration(milliseconds) {
 }
 
 function giveawayEmbed(giveaway, ended = false) {
+  const participantCount = giveaway.entries?.length || 0;
+  const totalTickets = giveaway.entryWeights || participantCount;
   const requirements = [];
   if (giveaway.requireServerTag) requirements.push('需要装备当前服务器的 **Server Tag**');
   if (giveaway.requiredRoleIds?.length) requirements.push(`需要身份组：${giveaway.requiredRoleIds.map((id) => `<@&${id}>`).join('、')}`);
@@ -703,11 +705,8 @@ function giveawayEmbed(giveaway, ended = false) {
   return new EmbedBuilder()
     .setColor(ended ? 0x747f8d : 0x5865f2)
     .setTitle(ended ? `🎉 抽奖结束：${giveaway.prize}` : `🎉 ${giveaway.prize}`)
-    .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
+    .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}\n\n**参加人数：${participantCount} · 总入场票：${totalTickets} · 获奖人数：${giveaway.winnerCount}**${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
     .addFields(
-      { name: '获奖人数', value: String(giveaway.winnerCount), inline: true },
-      { name: '参加人数', value: String(giveaway.entries.length), inline: true },
-      { name: '总入场票', value: String(giveaway.entryWeights || giveaway.entries.length), inline: true },
       { name: ended ? '结束时间' : '结束倒计时', value: ended ? `<t:${Math.floor(giveaway.endsAt / 1000)}:F>` : `<t:${Math.floor(giveaway.endsAt / 1000)}:R>`, inline: true },
     )
     .setFooter({ text: `主办人：${giveaway.hostName} · 抽奖 ID：${giveaway.id}` })
@@ -1482,14 +1481,14 @@ async function completePartnerAction(interaction, app, action) {
   if (action === 'post') {
     const forum = await guild.channels.fetch(config.forumChannelId).catch(() => null);
     if (!forum || forum.type !== ChannelType.GuildForum) throw new Error('贴文频道未设置或不是论坛频道。');
-    const thread = await forum.threads.create({ name: app.serverName.slice(0, 100), message: { content: '点击查看' }, reason: '发布合作贴文' });
-    await thread.send({ content: app.promotion, allowedMentions: { parse: ['users', 'roles', 'everyone'] } });
+    const thread = await forum.threads.create({ name: app.serverName.slice(0, 100), message: { content: app.promotion, allowedMentions: { parse: ['users', 'roles', 'everyone'] } }, reason: '发布合作贴文' });
     await thread.send({ content: `合作代表：${representative}`, allowedMentions: { users: [app.representativeId] } });
     result = `已在 ${forum} 发布合作贴文。`;
   } else if (action === 'text') {
     const channel = await guild.channels.fetch(config.textChannelId).catch(() => null);
     if (!channel?.isTextBased?.()) throw new Error('文字频道未设置或不可发送消息。');
     await channel.send({ content: app.promotion, allowedMentions: { parse: ['users', 'roles', 'everyone'] } });
+    await channel.send({ content: `合作代表：${representative}`, allowedMentions: { users: [app.representativeId] } });
     result = `已在 ${channel} 发布合作宣传。`;
   } else if (action === 'channel') {
     const category = await guild.channels.fetch(config.partnerCategoryId).catch(() => null);
@@ -1499,7 +1498,8 @@ async function completePartnerAction(interaction, app, action) {
       { id: app.representativeId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels], deny: [PermissionFlagsBits.UseApplicationCommands] },
       { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
     ], reason: '创建合作频道' });
-    await channel.send({ content: `${app.promotion}\n\n合作代表：${representative}`, allowedMentions: { users: [app.representativeId] } });
+    await channel.send({ content: app.promotion, allowedMentions: { parse: ['users', 'roles', 'everyone'] } });
+    await channel.send({ content: `合作代表：${representative}`, allowedMentions: { users: [app.representativeId] } });
     result = `已创建合作频道 ${channel}。`;
   } else if (action === 'ticket') {
     if (app.ticketChannelId) {
