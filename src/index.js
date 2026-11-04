@@ -64,11 +64,20 @@ if (!settings.partnerTickets) settings.partnerTickets = {};
 if (!settings.sponsorGiveaways) settings.sponsorGiveaways = {};
 if (!settings.guessNumberGames) settings.guessNumberGames = {};
 if (!settings.autoReactions) settings.autoReactions = {};
+if (!settings.globalBlacklist) settings.globalBlacklist = {};
 
 function saveSettings() {
   const tempPath = `${settingsPath}.tmp`;
   fs.writeFileSync(tempPath, JSON.stringify(settings, null, 2), 'utf8');
   fs.renameSync(tempPath, settingsPath);
+}
+
+function getGlobalBlacklistEntry(userId) {
+  return settings.globalBlacklist[userId] || null;
+}
+
+function isGlobalBlacklisted(userId) {
+  return Boolean(userId && getGlobalBlacklistEntry(userId));
 }
 
 function getStickySettings(guildId) {
@@ -357,18 +366,14 @@ async function fetchBotMember(guild) {
 }
 
 async function isGuildUsable(guild) {
-  if (isGuildAllowed(guild.id)) return true;
-  if (!ownerId) return false;
-  return Boolean(await guild.members.fetch(ownerId).catch(() => null));
+  return Boolean(guild);
 }
 
 async function canManage(interaction) {
   if (!interaction.guild) return false;
   if (isBotOwner(interaction.user?.id)) return true;
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return false;
-  if (allowedGuildIds.has(interaction.guild.id)) return true;
-  if (!ownerId) return allowedGuildIds.size === 0;
-  return Boolean(await interaction.guild.members.fetch(ownerId).catch(() => null));
+  return true;
 }
 
 function replacePlaceholders(text, member) {
@@ -1553,6 +1558,14 @@ const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('检查机器人是否在线。'),
   new SlashCommandBuilder().setName('help').setDescription('查看可用指令。'),
   new SlashCommandBuilder().setName('about').setDescription('查看机器人信息。'),
+  new SlashCommandBuilder()
+    .setName('blacklist').setDescription('机器人拥有者管理全局黑名单。')
+    .addSubcommand((subcommand) => subcommand.setName('add').setDescription('将用户加入全局黑名单。')
+      .addStringOption((option) => option.setName('user_id').setDescription('用户 ID。').setRequired(true))
+      .addStringOption((option) => option.setName('reason').setDescription('列入黑名单原因。').setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('remove').setDescription('移除全局黑名单。')
+      .addStringOption((option) => option.setName('user_id').setDescription('用户 ID。').setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('list').setDescription('查看全局黑名单。')),
   new SlashCommandBuilder().setName('message').setDescription('查看自己的消息统计。'),
   new SlashCommandBuilder().setName('welcome').setDescription('打开欢迎和离开设置面板。'),
   new SlashCommandBuilder().setName('roles').setDescription('打开身份组面板设置。'),
@@ -1591,7 +1604,8 @@ const commands = [
     .addStringOption((option) => option.setName('reason').setDescription('惩罚原因，可不填。').setRequired(false)),
   new SlashCommandBuilder()
     .setName('ban').setDescription('封禁一名成员。')
-    .addUserOption((option) => option.setName('member').setDescription('要封禁的成员。').setRequired(true))
+    .addUserOption((option) => option.setName('member').setDescription('要封禁的成员，可不填。').setRequired(false))
+    .addStringOption((option) => option.setName('user_id').setDescription('不在本服务器时填写用户 ID。').setRequired(false))
     .addStringOption((option) => option.setName('reason').setDescription('惩罚原因，可不填。').setRequired(false)),
   new SlashCommandBuilder()
     .setName('unban').setDescription('解除一名用户的封禁。')
@@ -1601,21 +1615,6 @@ const commands = [
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
-  const guildIds = [...new Set([
-    ...(commandGuildId ? [commandGuildId] : []),
-    ...allowedGuildIds,
-  ])];
-
-  if (guildIds.length > 0) {
-    await Promise.all(
-      guildIds.map((guildId) =>
-        rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands }),
-      ),
-    );
-    console.log(`Registered commands instantly in guilds: ${guildIds.join(', ')}`);
-    return;
-  }
-
   await rest.put(Routes.applicationCommands(clientId), { body: commands });
   console.log('Registered global commands. They may take up to an hour to appear.');
 }
@@ -1672,6 +1671,7 @@ async function handleAutoReactionMessage(message) {
 
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot) return;
+  if (isGlobalBlacklisted(message.author.id)) return;
   handleGuessNumberMessage(message).catch((error) => console.error('Guess number message error:', error));
   handleGiveawayClaimMessage(message).catch((error) => console.error('Giveaway claim message error:', error));
   handleAutoReactionMessage(message).catch((error) => console.error('Auto reaction error:', error));
@@ -1706,7 +1706,7 @@ client.on(Events.MessageCreate, (message) => {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready! Logged in as ${readyClient.user.tag}`);
-  if (allowedGuildIds.size) console.log(`Restricted to guilds: ${[...allowedGuildIds].join(', ')}`);
+  console.log('Public mode enabled: all servers can use the bot.');
   for (const giveaway of Object.values(settings.giveaways)) {
     if (giveaway.status === 'active') {
       if (Date.now() >= giveaway.endsAt) await finishGiveaway(giveaway.id).catch(console.error);
@@ -1724,6 +1724,11 @@ client.once(Events.ClientReady, async (readyClient) => {
   for (const game of Object.values(settings.guessNumberGames)) {
     if (game.status === 'active') scheduleGuessNumberHints(game);
   }
+  for (const guild of readyClient.guilds.cache.values()) {
+    for (const [userId, entry] of Object.entries(settings.globalBlacklist)) {
+      enforceGlobalBlacklistInGuild(guild, userId, entry).catch((error) => console.error('Could not recheck global blacklist:', error));
+    }
+  }
   for (const guild of readyClient.guilds.cache.values()) updateServerStats(guild).catch(console.error);
   const periodicStatsRefresh = setInterval(() => {
     for (const guild of readyClient.guilds.cache.values()) scheduleServerStatsUpdate(guild);
@@ -1732,9 +1737,8 @@ client.once(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.GuildCreate, async (guild) => {
-  if (!(await isGuildUsable(guild))) {
-    console.log(`Leaving unauthorized guild ${guild.id}.`);
-    await guild.leave().catch((error) => console.error('Could not leave guild:', error));
+  for (const [userId, entry] of Object.entries(settings.globalBlacklist)) {
+    await enforceGlobalBlacklistInGuild(guild, userId, entry).catch((error) => console.error('Could not enforce global blacklist:', error));
   }
 });
 
@@ -1763,6 +1767,7 @@ async function sendLeave(member) {
   await channel.send({ embeds: [embed] }).catch(console.error);
 }
 
+client.on(Events.GuildMemberAdd, (member) => enforceGlobalBlacklistMember(member).catch((error) => console.error('Could not enforce global blacklist on join:', error)));
 client.on(Events.GuildMemberAdd, sendWelcome);
 client.on(Events.GuildMemberRemove, sendLeave);
 client.on(Events.GuildMemberAdd, (member) => scheduleServerStatsUpdate(member.guild));
@@ -1817,6 +1822,38 @@ async function notifyModeratedUser(guild, action, target, duration, reason, exec
   await user.send({ embeds: [embed] }).catch(() => console.warn(`Could not DM ${user.tag || user.id}.`));
 }
 
+async function notifyGuildOwnerOfBlacklist(guild, user, entry, result) {
+  const owner = await client.users.fetch(guild.ownerId).catch(() => null);
+  if (!owner) return;
+  await owner.send(`全局黑名单通知：用户 **${user.tag || user.id}**（ID：${user.id}）${result === 'banned' ? '已被机器人自动封禁' : '无法被机器人封禁，已禁止使用本机器人'}。\n原因：${entry.reason}`).catch(() => {});
+}
+
+async function enforceGlobalBlacklistMember(member) {
+  const entry = getGlobalBlacklistEntry(member.user.id);
+  if (!entry || !member.guild) return;
+  const reason = `全局黑名单：${entry.reason}`.slice(0, 512);
+  const botMember = await fetchBotMember(member.guild);
+  const canBan = Boolean(botMember?.permissions.has(PermissionFlagsBits.BanMembers) && member.bannable);
+  if (canBan) {
+    await member.ban({ reason, deleteMessageSeconds: 0 }).then(async () => {
+      await notifyGuildOwnerOfBlacklist(member.guild, member.user, entry, 'banned');
+      await logModeration(member.guild, getGuildSettings(member.guild.id), 'global-blacklist-ban', member, '', reason, client.user, null);
+    }).catch(async (error) => {
+      console.error(`Could not auto-ban blacklisted user ${member.user.id}:`, error);
+      await notifyGuildOwnerOfBlacklist(member.guild, member.user, entry, 'blocked');
+      await logModeration(member.guild, getGuildSettings(member.guild.id), 'global-blacklist-blocked', member, '', `${reason}（自动封禁失败：${error.message}）`, client.user, null);
+    });
+  } else {
+    await notifyGuildOwnerOfBlacklist(member.guild, member.user, entry, 'blocked');
+    await logModeration(member.guild, getGuildSettings(member.guild.id), 'global-blacklist-blocked', member, '', reason, client.user, null);
+  }
+}
+
+async function enforceGlobalBlacklistInGuild(guild, userId, entry) {
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (member) await enforceGlobalBlacklistMember(member);
+}
+
 async function performModeration(interaction, action) {
   await interaction.deferReply();
   const config = getGuildSettings(interaction.guild.id);
@@ -1857,8 +1894,33 @@ async function performModeration(interaction, action) {
     return;
   }
 
-  const member = user && await interaction.guild.members.fetch(user.id).catch(() => null);
+  const requestedUserId = user?.id || interaction.options.getString('user_id')?.trim();
+  if (action === 'ban' && !user && !/^\d{15,25}$/.test(requestedUserId || '')) {
+    await interaction.editReply({ content: '请填写要封禁的成员，或在 `user_id` 填写有效的 Discord 用户 ID。' });
+    return;
+  }
+  const targetUser = user || (action === 'ban' ? await client.users.fetch(requestedUserId).catch(() => null) : null);
+  if (action === 'ban' && !targetUser) {
+    await interaction.editReply({ content: '找不到这个 Discord 用户，请确认 ID 正确。' });
+    return;
+  }
+  const member = targetUser && await interaction.guild.members.fetch(targetUser.id).catch(() => null);
   if (!member) {
+    if (action === 'ban' && targetUser) {
+      if (isBotOwner(targetUser.id)) { await interaction.editReply({ content: '这个用户无法执行惩罚操作。' }); return; }
+      try {
+        await interaction.guild.members.ban(targetUser.id, { reason, deleteMessageSeconds: 0 });
+        await interaction.editReply({ content: `已封禁不在本服务器的用户 **${targetUser.tag}**。如果该用户尝试加入本服务器，将无法进入。` });
+        Promise.all([
+          logModeration(interaction.guild, config, 'ban', targetUser, '', reason, interaction.user, interaction.channel),
+          notifyModeratedUser(interaction.guild, 'ban', targetUser, '', reason, interaction.user, interaction.channel),
+        ]).catch((error) => console.error('Could not finish absent-user ban notifications:', error));
+      } catch (error) {
+        console.error('Ban absent user failed:', error);
+        await interaction.editReply({ content: '封禁失败，请检查 Bot 是否拥有封禁成员权限。' });
+      }
+      return;
+    }
     await interaction.editReply({ content: '找不到这个服务器成员。' });
     return;
   }
@@ -1900,7 +1962,7 @@ async function performModeration(interaction, action) {
     } else if (action === 'ban') {
       await member.ban({ reason, deleteMessageSeconds: 0 });
     }
-    await interaction.editReply({ content: `已对 **${user.tag}** 执行 \/${action}${action === 'mute' ? `（${durationText}）` : ''}。` });
+    await interaction.editReply({ content: `已对 **${targetUser.tag}** 执行 \/${action}${action === 'mute' ? `（${durationText}）` : ''}。` });
     Promise.all([
       logModeration(interaction.guild, config, action, member, durationText, reason, interaction.user, interaction.channel),
       notifyModeratedUser(interaction.guild, action, member, durationText, reason, interaction.user, interaction.channel),
@@ -1937,7 +1999,21 @@ async function performPrefixModeration(message, action, args) {
   }
   const targetId = (args.target || '').match(/^<@!?([0-9]{15,25})>$/)?.[1] || args.target;
   const member = await message.guild.members.fetch(targetId).catch(() => null);
-  if (!member) { await message.reply('找不到这个服务器成员。用法：mute @成员 10m 原因'); return; }
+  if (!member && action === 'ban' && /^\d{15,25}$/.test(targetId || '')) {
+    const target = await client.users.fetch(targetId).catch(() => null);
+    if (!target) { await message.reply('找不到这个 Discord 用户。'); return; }
+    if (isBotOwner(target.id)) { await message.reply('这个用户无法执行惩罚操作。'); return; }
+    try {
+      await message.guild.members.ban(target.id, { reason, deleteMessageSeconds: 0 });
+      await message.reply(`已封禁不在本服务器的用户 **${target.tag}**。`);
+      Promise.all([
+        logModeration(message.guild, config, 'ban', target, '', reason, message.author, message.channel),
+        notifyModeratedUser(message.guild, 'ban', target, '', reason, message.author, message.channel),
+      ]).catch(console.error);
+    } catch (error) { console.error('Prefix ban absent user failed:', error); await message.reply('封禁失败，请检查 Bot 权限。'); }
+    return;
+  }
+  if (!member) { await message.reply('找不到这个服务器成员。用法：mute @成员 10m 原因；ban 可直接填写用户 ID。'); return; }
   if (isBotOwner(member.id)) { await message.reply('这个成员无法执行惩罚操作。'); return; }
   if (member.id === message.author.id) { await message.reply('不能对自己执行这个操作。'); return; }
   if ((action === 'mute' || action === 'unmute') && !member.moderatable) { await message.reply('Bot 无法管理这个成员，请检查身份组层级和权限。'); return; }
@@ -1987,6 +2063,41 @@ process.on('SIGINT', () => shutdown('SIGINT').catch((error) => { console.error('
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'blacklist') {
+      if (!isBotOwner(interaction.user.id)) {
+        await interaction.reply({ content: '这个指令只有机器人拥有者可以使用。', ephemeral: true });
+        return;
+      }
+      const subcommand = interaction.options.getSubcommand();
+      if (subcommand === 'list') {
+        const entries = Object.entries(settings.globalBlacklist);
+        await interaction.reply({ content: entries.length ? `**全局黑名单**\n${entries.map(([id, entry]) => `• <@${id}>（${id}）— ${entry.reason}`).join('\n')}` : '全局黑名单目前为空。', ephemeral: true });
+        return;
+      }
+      const userId = interaction.options.getString('user_id').trim();
+      if (!/^\d{15,25}$/.test(userId)) { await interaction.reply({ content: '请输入有效的 Discord 用户 ID。', ephemeral: true }); return; }
+      if (isBotOwner(userId)) { await interaction.reply({ content: '不能将机器人拥有者列入全局黑名单。', ephemeral: true }); return; }
+      if (subcommand === 'remove') {
+        if (!settings.globalBlacklist[userId]) { await interaction.reply({ content: '这个用户不在全局黑名单中。', ephemeral: true }); return; }
+        delete settings.globalBlacklist[userId];
+        saveSettings();
+        await interaction.reply({ content: `已将用户 ${userId} 从全局黑名单移除。`, ephemeral: true });
+        return;
+      }
+      const reason = interaction.options.getString('reason').trim().slice(0, 450);
+      if (!reason) { await interaction.reply({ content: '必须填写列入全局黑名单的原因。', ephemeral: true }); return; }
+      const user = await client.users.fetch(userId).catch(() => null);
+      if (!user) { await interaction.reply({ content: '找不到这个 Discord 用户，请确认 ID 正确。', ephemeral: true }); return; }
+      settings.globalBlacklist[userId] = { reason, addedAt: Date.now(), addedBy: interaction.user.id };
+      saveSettings();
+      await Promise.all(client.guilds.cache.map((guild) => enforceGlobalBlacklistInGuild(guild, userId, settings.globalBlacklist[userId])));
+      await interaction.reply({ content: `已将 **${user.tag}** 加入全局黑名单。机器人会在其进入服务器时自动封禁；如果没有封禁权限，则禁止其使用机器人。`, ephemeral: true });
+      return;
+    }
+    if (isGlobalBlacklisted(interaction.user?.id) && !(interaction.isChatInputCommand() && interaction.commandName === 'blacklist' && isBotOwner(interaction.user.id))) {
+      await interaction.reply({ content: '你无法使用此机器人。', ephemeral: true }).catch(() => {});
+      return;
+    }
     if (!interaction.guild || !(await isGuildUsable(interaction.guild))) {
       await interaction.reply({ content: '这个服务器没有启用此机器人。', ephemeral: true }).catch(() => {});
       return;
@@ -1996,7 +2107,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 打开猜数字管理面板\n`/autoreaction` — 设置当前频道自动表情\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员', ephemeral: true });
+      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 打开猜数字管理面板\n`/autoreaction` — 设置当前频道自动表情\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员\n全局黑名单指令只允许机器人拥有者使用；`/ban` 也支持直接填写不在服务器的用户 ID。', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
