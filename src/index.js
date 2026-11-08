@@ -1619,6 +1619,18 @@ async function registerCommands() {
   console.log('Registered global commands. They may take up to an hour to appear.');
 }
 
+async function clearLegacyGuildCommands(guilds) {
+  const rest = new REST({ version: '10' }).setToken(token);
+  await Promise.all([...guilds.values()].map(async (guild) => {
+    try {
+      await rest.put(Routes.applicationGuildCommands(clientId, guild.id), { body: [] });
+      console.log(`Cleared legacy server commands in ${guild.name} (${guild.id}).`);
+    } catch (error) {
+      console.error(`Could not clear legacy commands in ${guild.name} (${guild.id}):`, error.message);
+    }
+  }));
+}
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildPresences],
 });
@@ -1707,6 +1719,7 @@ client.on(Events.MessageCreate, (message) => {
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Ready! Logged in as ${readyClient.user.tag}`);
   console.log('Public mode enabled: all servers can use the bot.');
+  await clearLegacyGuildCommands(readyClient.guilds.cache);
   for (const giveaway of Object.values(settings.giveaways)) {
     if (giveaway.status === 'active') {
       if (Date.now() >= giveaway.endsAt) await finishGiveaway(giveaway.id).catch(console.error);
