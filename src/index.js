@@ -415,8 +415,14 @@ function panelEmbed(guild, config) {
       `离开图片：${config.leaveImage ? '已设置' : '未设置'}\n` +
       `私讯欢迎：${config.dmWelcome ? '开启' : '关闭'}\n\n` +
       '可用变数：`{user}` `{username}` `{tag}` `{userId}` `{server}` `{serverId}`\n' +
-      '`{count}` `{memberCount}` `{memberNumber}` `{joinPosition}` `{humanCount}` `{botCount}`\n' +
-      '`{onlineCount}` `{offlineCount}` `{joinedAt}` `{createdAt}`',
+      '**变数用途：**\n' +
+      '`{user}`：提及成员 · `{username}`：用户名 · `{tag}`：用户名#标签\n' +
+      '`{userId}`：成员 ID · `{server}`：服务器名称 · `{serverId}`：服务器 ID\n' +
+      '`{count}` / `{memberCount}` / `{memberNumber}`：当前服务器总人数\n' +
+      '`{joinPosition}`：成员加入时的当前人数（可当作入群序号显示）\n' +
+      '`{humanCount}`：真人数量 · `{botCount}`：机器人数量\n' +
+      '`{onlineCount}`：在线数量 · `{offlineCount}`：离线数量\n' +
+      '`{joinedAt}`：成员加入时间 · `{createdAt}`：成员账号创建时间',
     )
     .setFooter({ text: `${guild.name} · 只有授权用户可以操作` });
 }
@@ -562,6 +568,7 @@ function serverStatsComponents(stats) {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('serverstats_setup').setLabel('设置频道名称').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('serverstats_more_setup').setLabel('设置更多名称').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('serverstats_extra_setup').setLabel('设置新增名称').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('serverstats_update').setLabel('刷新').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('serverstats_toggle').setLabel(stats.enabled ? '关闭统计' : '开启统计').setStyle(stats.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
     ),
@@ -592,11 +599,39 @@ function serverStatsMoreModal(stats) {
   );
 }
 
+function serverStatsExtraModal(stats) {
+  const fields = [
+    ['offline_name', '下线人数频道名称', stats.offlineName, '例如：⚫ 下线人数：{count}'],
+    ['boost_level_name', '加成等级频道名称', stats.boostLevelName, '例如：⭐ 加成等级：{count}'],
+  ];
+  return new ModalBuilder().setCustomId('serverstats_extra_modal').setTitle('设置新增统计名称').addComponents(
+    ...fields.map(([id, label, value, placeholder]) => new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(true).setValue(value).setPlaceholder(placeholder).setMaxLength(100))),
+  );
+}
+
+const serverStatsInFlight = new Set();
+const serverStatsMemberSync = new Set();
+
 async function updateServerStats(guild) {
+  if (!guild || serverStatsInFlight.has(guild.id)) return;
+  const initialStats = getGuildSettings(guild.id).serverStats;
+  if (!initialStats.enabled) return;
+  serverStatsInFlight.add(guild.id);
+  try {
+    await performServerStatsUpdate(guild);
+  } finally {
+    serverStatsInFlight.delete(guild.id);
+  }
+}
+
+async function performServerStatsUpdate(guild) {
   const config = getGuildSettings(guild.id);
   const stats = config.serverStats;
   if (!stats.enabled) return;
-  await guild.members.fetch().catch(() => null);
+  if (!serverStatsMemberSync.has(guild.id)) {
+    await guild.members.fetch().catch((error) => console.error(`Could not load members for server stats in ${guild.id}:`, error.message));
+    serverStatsMemberSync.add(guild.id);
+  }
   const members = guild.members.cache;
   let category = stats.categoryId ? await guild.channels.fetch(stats.categoryId).catch(() => null) : null;
   if (!category || category.type !== ChannelType.GuildCategory) {
@@ -661,12 +696,23 @@ async function updateServerStats(guild) {
 
 const serverStatsTimers = new Map();
 function scheduleServerStatsUpdate(guild) {
+  if (!guild || !getGuildSettings(guild.id).serverStats.enabled) return;
   if (serverStatsTimers.has(guild.id)) clearTimeout(serverStatsTimers.get(guild.id));
   serverStatsTimers.set(guild.id, setTimeout(() => {
     serverStatsTimers.delete(guild.id);
     updateServerStats(guild).catch((error) => console.error('Could not refresh server stats:', error));
   }, 1500));
 }
+
+// 使用单一全局定时器进行低频兜底刷新，避免为每个服务器创建常驻 interval。
+const serverStatsRefreshInterval = setInterval(() => {
+  for (const guild of client.guilds.cache.values()) {
+    if (getGuildSettings(guild.id).serverStats.enabled) {
+      updateServerStats(guild).catch((error) => console.error('Could not refresh server stats:', error));
+    }
+  }
+}, 60_000);
+serverStatsRefreshInterval.unref?.();
 
 function parseDuration(value) {
   const match = String(value).trim().match(/^(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h|days?|d|weeks?|w)$/i);
@@ -1755,6 +1801,13 @@ client.on(Events.GuildCreate, async (guild) => {
   }
 });
 
+client.on(Events.GuildDelete, (guild) => {
+  if (serverStatsTimers.has(guild.id)) clearTimeout(serverStatsTimers.get(guild.id));
+  serverStatsTimers.delete(guild.id);
+  serverStatsInFlight.delete(guild.id);
+  serverStatsMemberSync.delete(guild.id);
+});
+
 async function sendWelcome(member) {
   if (!(await isGuildUsable(member.guild)) || member.user.bot) return;
   const config = getGuildSettings(member.guild.id);
@@ -2827,6 +2880,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.showModal(serverStatsModal(config.serverStats));
     } else if (interaction.customId === 'serverstats_more_setup') {
       await interaction.showModal(serverStatsMoreModal(config.serverStats));
+    } else if (interaction.customId === 'serverstats_extra_setup') {
+      await interaction.showModal(serverStatsExtraModal(config.serverStats));
     } else if (interaction.customId === 'serverstats_update') {
       config.serverStats.enabled = true;
       await interaction.deferUpdate();
@@ -2859,6 +2914,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.editReply({ content: '统计开启失败，请检查 Bot 是否拥有管理频道、管理身份组和查看成员的权限。', embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) }).catch(() => {});
         }
       } else {
+        if (serverStatsTimers.has(interaction.guild.id)) clearTimeout(serverStatsTimers.get(interaction.guild.id));
+        serverStatsTimers.delete(interaction.guild.id);
         await interaction.update({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats) });
       }
     } else if (interaction.customId.startsWith('partner_')) {
@@ -3200,6 +3257,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply({ ephemeral: true });
       await updateServerStats(interaction.guild);
       await interaction.editReply({ content: '更多统计频道名称已保存并更新。' });
+      return;
+    }
+    if (interaction.customId === 'serverstats_extra_modal') {
+      const stats = config.serverStats;
+      stats.offlineName = interaction.fields.getTextInputValue('offline_name').trim() || '⚫ 下线人数：{count}';
+      stats.boostLevelName = interaction.fields.getTextInputValue('boost_level_name').trim() || '⭐ 加成等级：{count}';
+      stats.enabled = true;
+      await interaction.deferReply({ ephemeral: true });
+      await updateServerStats(interaction.guild);
+      await interaction.editReply({ content: '新增统计频道名称已保存并更新。' });
       return;
     }
     if (interaction.customId === 'moderation_prefix_modal') {

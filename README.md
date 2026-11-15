@@ -43,6 +43,8 @@
 
 管理员执行 `/serverstats` 后会收到私密设置面板。使用**多选下拉菜单**选择想要显示的统计项目（可同时选择多个）；选择完成后点击“刷新”更新频道。设置频道名称、刷新统计、开启/关闭统计系统使用按钮。Bot 会自动创建一个名为 **服务器统计** 的类别，并在其中创建所选的不可加入语音频道。管理员可以选择以下统计：
 
+“设置新增名称”可以修改**下线人数**和**加成等级**频道名称；所有已选择的统计项目都会出现在设置面板和频道中。统计刷新使用防重复锁，并且每个服务器只进行一次成员同步，关闭统计或离开服务器时会清理待执行的刷新定时器。
+
 - 服务器总人数（真人与机器人）
 - 真人成员数量
 - 当前在线人数
@@ -289,7 +291,7 @@ Bot 需要拥有目标频道的 **查看频道、阅读消息历史和添加反�
 
 支持的内容变量：`{user}`、`{mention}`、`{username}`、`{tag}`、`{userId}`、`{server}`、`{serverId}`、`{count}`、`{memberCount}`、`{memberNumber}`、`{joinPosition}`、`{humanCount}`、`{botCount}`、`{onlineCount}`、`{offlineCount}`、`{joinedAt}`、`{createdAt}`。
 
-其中 `{memberNumber}` 和 `{joinPosition}` 会显示欢迎事件发生时服务器成员总数，可用于制作“你是第几个成员”的欢迎文字；`{joinedAt}` 是加入服务器时间，`{createdAt}` 是 Discord 账号创建时间。
+变数用途：`{user}` / `{mention}` 会提及成员；`{username}`、`{tag}`、`{userId}` 分别是用户名、标签和 ID；`{server}`、`{serverId}` 是服务器名称和 ID；`{count}`、`{memberCount}`、`{memberNumber}` 是当前总人数；`{joinPosition}` 是欢迎事件发生时的当前人数，可用于“你是第几个成员”；`{humanCount}`、`{botCount}`、`{onlineCount}`、`{offlineCount}` 分别是真人、机器人、在线和离线数量；`{joinedAt}` 是加入时间；`{createdAt}` 是 Discord 账号创建时间。
 
 图片使用公开图片 URL（例如 Discord CDN、Imgur 或你的图床）。清空图片 URL 即可移除图片。
 
