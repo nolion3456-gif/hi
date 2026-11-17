@@ -801,10 +801,13 @@ function giveawayEmbed(giveaway, ended = false) {
   if (giveaway.firstEntries) requirements.push(`前 **${giveaway.firstEntries}** 位参加者直接获奖`);
   if (giveaway.conditionsText) requirements.push(`赞助者设置条件：${giveaway.conditionsText}`);
   const winnerText = giveaway.winnerIds?.length ? `\n\n获奖者：${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')}` : '';
+  const sponsorshipNotice = giveaway.isSponsored
+    ? `**🎁 这是一个赞助抽奖**\n赞助者：<@${giveaway.sponsorId}>${giveaway.sponsorTag ? `（${giveaway.sponsorTag}）` : ''}\n\n`
+    : '';
   return localizeResponseValue({ id: giveaway.guildId }, new EmbedBuilder()
     .setColor(ended ? 0x747f8d : 0x5865f2)
     .setTitle(ended ? `🎉 抽奖结束：${giveaway.prize}` : `🎉 ${giveaway.prize}`)
-    .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}\n\n**参加人数：${participantCount} · 总入场票：${totalTickets} · 获奖人数：${giveaway.winnerCount}**${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
+    .setDescription(`${sponsorshipNotice}${giveaway.description || '点击下方按钮参加抽奖！'}\n\n**参加人数：${participantCount} · 总入场票：${totalTickets} · 获奖人数：${giveaway.winnerCount}**${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
     .addFields(
       { name: ended ? '结束时间' : '结束倒计时', value: ended ? `<t:${Math.floor(giveaway.endsAt / 1000)}:F>` : `<t:${Math.floor(giveaway.endsAt / 1000)}:R>`, inline: true },
     )
@@ -1088,7 +1091,7 @@ async function publishSponsoredGiveaway(interaction, app) {
     claimDuration: 86_400_000, claimMessageRequired: false, claimMessageChannelId: '', autoReroll: false,
     messageId: '', entries: [], entryWeights: 0, entryWeightByUser: {}, winnerIds: [],
     createdAt: Date.now(), endsAt: Date.now() + app.duration, status: 'active',
-    hostId: app.sponsorId, hostName: app.sponsorTag,
+    hostId: app.sponsorId, hostName: app.sponsorTag, isSponsored: true, sponsorId: app.sponsorId, sponsorTag: app.sponsorTag,
   };
   const targetChannel = await interaction.guild.channels.fetch(giveaway.channelId).catch(() => null);
   if (!targetChannel?.isTextBased?.()) throw new Error('赞助抽奖发布频道不存在或不可发送消息。');
