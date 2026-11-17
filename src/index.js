@@ -72,6 +72,52 @@ function saveSettings() {
   fs.renameSync(tempPath, settingsPath);
 }
 
+// Discord 讯息大多由固定的简体中文文案组成；使用轻量转换层，避免改变成员自行填写的内容。
+const traditionalPhrases = {
+  '服务器': '伺服器', '管理员': '管理員', '管理服务器': '管理伺服器', '成员': '成員', '用户': '使用者',
+  '机器人': '機器人', '频道': '頻道', '身份组': '身分組', '下线': '離線', '在线': '線上', '总人数': '總人數',
+  '人数': '人數', '数量': '數量', '设置': '設定', '开启': '開啟', '关闭': '關閉', '保存': '儲存', '刷新': '重新整理',
+  '欢迎': '歡迎', '离开': '離開', '内容': '內容', '图片': '圖片', '惩罚': '處罰', '实行': '執行', '对象': '對象',
+  '人员': '人員', '时间': '時間', '合作': '合作', '审核': '審核', '发布': '發布', '申请': '申請', '赞助': '贊助',
+  '抽奖': '抽獎', '参加': '參加', '条件': '條件', '获奖': '獲獎', '身份': '身分', '选择': '選擇', '当前': '目前',
+  '没有': '沒有', '已经': '已經', '请输入': '請輸入', '查看': '查看', '系统': '系統', '说明': '說明', '详细': '詳細',
+  '信息': '資訊', '帐号': '帳號', '账号': '帳號', '时长': '時長', '分钟': '分鐘', '小时': '小時',
+};
+
+function traditionalize(text) {
+  let result = String(text ?? '');
+  for (const [from, to] of Object.entries(traditionalPhrases)) result = result.replaceAll(from, to);
+  return result;
+}
+
+function guildText(guildOrId, text) {
+  const guildId = typeof guildOrId === 'string' ? guildOrId : guildOrId?.id;
+  return getGuildSettings(guildId)?.language === 'zh-TW' ? traditionalize(text) : text;
+}
+
+function localizeResponseValue(guild, value) {
+  if (!value || getGuildSettings(guild.id).language !== 'zh-TW') return value;
+  if (typeof value === 'string') return traditionalize(value);
+  if (Array.isArray(value)) return value.map((item) => localizeResponseValue(guild, item));
+  if (value instanceof EmbedBuilder) {
+    const embed = new EmbedBuilder(value.toJSON());
+    for (const key of ['title', 'description', 'footer', 'author', 'fields']) {
+      if (key === 'fields' && embed.data.fields) embed.data.fields = embed.data.fields.map((field) => ({ ...field, name: traditionalize(field.name), value: traditionalize(field.value) }));
+      else if (key === 'footer' && embed.data.footer?.text) embed.data.footer.text = traditionalize(embed.data.footer.text);
+      else if (key === 'author' && embed.data.author?.name) embed.data.author.name = traditionalize(embed.data.author.name);
+      else if (typeof embed.data[key] === 'string') embed.data[key] = traditionalize(embed.data[key]);
+    }
+    return embed;
+  }
+  if (typeof value === 'object') {
+    const result = { ...value };
+    if (Object.prototype.hasOwnProperty.call(result, 'content')) result.content = traditionalize(result.content);
+    if (result.embeds) result.embeds = result.embeds.map((embed) => localizeResponseValue(guild, embed));
+    return result;
+  }
+  return value;
+}
+
 function getGlobalBlacklistEntry(userId) {
   return settings.globalBlacklist[userId] || null;
 }
@@ -238,6 +284,7 @@ let giveawayMessageSaveCounter = 0;
 function getGuildSettings(guildId) {
   if (!settings[guildId]) {
     settings[guildId] = {
+      language: 'zh-CN',
       welcomeChannelId: '',
       leaveChannelId: '',
       welcomeMessage: '欢迎 {user} 加入 **{server}**！',
@@ -283,6 +330,7 @@ function getGuildSettings(guildId) {
     },
     };
   }
+  if (!['zh-CN', 'zh-TW'].includes(settings[guildId].language)) settings[guildId].language = 'zh-CN';
   if (!settings[guildId].rolePanel) {
     settings[guildId].rolePanel = {
       title: '身份组领取面板',
@@ -753,7 +801,7 @@ function giveawayEmbed(giveaway, ended = false) {
   if (giveaway.firstEntries) requirements.push(`前 **${giveaway.firstEntries}** 位参加者直接获奖`);
   if (giveaway.conditionsText) requirements.push(`赞助者设置条件：${giveaway.conditionsText}`);
   const winnerText = giveaway.winnerIds?.length ? `\n\n获奖者：${giveaway.winnerIds.map((id) => `<@${id}>`).join('、')}` : '';
-  return new EmbedBuilder()
+  return localizeResponseValue({ id: giveaway.guildId }, new EmbedBuilder()
     .setColor(ended ? 0x747f8d : 0x5865f2)
     .setTitle(ended ? `🎉 抽奖结束：${giveaway.prize}` : `🎉 ${giveaway.prize}`)
     .setDescription(`${giveaway.description || '点击下方按钮参加抽奖！'}\n\n**参加人数：${participantCount} · 总入场票：${totalTickets} · 获奖人数：${giveaway.winnerCount}**${requirements.length ? `\n\n**参加条件**\n${requirements.join('\n')}` : ''}${winnerText}`)
@@ -761,7 +809,7 @@ function giveawayEmbed(giveaway, ended = false) {
       { name: ended ? '结束时间' : '结束倒计时', value: ended ? `<t:${Math.floor(giveaway.endsAt / 1000)}:F>` : `<t:${Math.floor(giveaway.endsAt / 1000)}:R>`, inline: true },
     )
     .setFooter({ text: `主办人：${giveaway.hostName} · 抽奖 ID：${giveaway.id}` })
-    .setTimestamp(new Date(giveaway.createdAt));
+    .setTimestamp(new Date(giveaway.createdAt)));
 }
 
 function giveawayButtons(giveaway, disabled = false) {
@@ -955,11 +1003,11 @@ function sponsorGiveawayPublicComponents() {
 }
 
 function sponsorGiveawayAdminEmbed(guild, config) {
-  return new EmbedBuilder().setColor(0x57f287).setTitle('赞助抽奖设置').setDescription(
+  return localizeResponseValue(guild, new EmbedBuilder().setColor(0x57f287).setTitle('赞助抽奖设置').setDescription(
     `审核频道：${config.sponsorGiveaway.reviewChannelId ? `<#${config.sponsorGiveaway.reviewChannelId}>` : '未设置'}\n` +
     `发布频道：${config.sponsorGiveaway.publishChannelId ? `<#${config.sponsorGiveaway.publishChannelId}>` : '未设置'}\n\n` +
     '设置审核频道后，发布申请面板，成员即可提交赞助抽奖资料。',
-  ).setFooter({ text: `${guild.name} · 赞助抽奖需管理员审核` });
+  ).setFooter({ text: `${guild.name} · 赞助抽奖需管理员审核` }));
 }
 
 function sponsorGiveawayAdminComponents() {
@@ -1462,14 +1510,14 @@ function partnerId() {
 
 function partnerAdminEmbed(guild, config) {
   const p = config.partnership;
-  return new EmbedBuilder().setColor(0x5865f2).setTitle('合作系统设置').setDescription(
+  return localizeResponseValue(guild, new EmbedBuilder().setColor(0x5865f2).setTitle('合作系统设置').setDescription(
     `审核频道：${p.reviewChannelId ? `<#${p.reviewChannelId}>` : '未设置'}\n` +
     `贴文频道：${p.forumChannelId ? `<#${p.forumChannelId}>` : '未设置'}\n` +
     `文字频道：${p.textChannelId ? `<#${p.textChannelId}>` : '未设置'}\n` +
     `合作频道类别：${p.partnerCategoryId ? `<#${p.partnerCategoryId}>` : '未设置'}\n` +
     `工单类别：${p.ticketCategoryId ? `<#${p.ticketCategoryId}>` : '未设置'}\n\n` +
     '设置审核目标后，点击“发布合作面板”让其他服务器代表提交资料。',
-  ).setFooter({ text: `${guild.name} · 合作申请由管理员审核` });
+  ).setFooter({ text: `${guild.name} · 合作申请由管理员审核` }));
 }
 
 function partnerAdminComponents() {
@@ -1604,6 +1652,9 @@ const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('检查机器人是否在线。'),
   new SlashCommandBuilder().setName('help').setDescription('查看可用指令。'),
   new SlashCommandBuilder().setName('about').setDescription('查看机器人信息。'),
+  new SlashCommandBuilder().setName('language').setDescription('设置本服务器使用的机器人语言。')
+    .addStringOption((option) => option.setName('language').setDescription('选择语言。').setRequired(true)
+      .addChoices({ name: '简体中文', value: 'zh-CN' }, { name: '繁體中文', value: 'zh-TW' })),
   new SlashCommandBuilder()
     .setName('blacklist').setDescription('机器人拥有者管理全局黑名单。')
     .addSubcommand((subcommand) => subcommand.setName('add').setDescription('将用户加入全局黑名单。')
@@ -1870,7 +1921,7 @@ function moderationEmbed(guild, action, target, duration, reason, executor, acti
   if (action === 'mute') embed.spliceFields(2, 0, { name: '禁言时长', value: duration, inline: true });
   if (targetAvatar) embed.setThumbnail(targetAvatar);
   if (!directMessage) embed.setFooter({ text: `${guild.name} · Discord 管理员惩罚记录`, iconURL: guild.iconURL?.({ extension: 'png', size: 64 }) || undefined });
-  return embed;
+  return localizeResponseValue(guild, embed);
 }
 
 async function logModeration(guild, config, action, target, duration, reason, executor, actionChannel) {
@@ -2173,7 +2224,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
     } else if (interaction.commandName === 'help') {
-      await interaction.reply({ content: '**可用指令**\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看今天、本周、本月和总消息数\n`/welcome` — 打开欢迎离开设置面板\n`/roles` — 打开身份组面板设置\n`/moderation` — 设置惩罚日志频道和 Prefix\n`/serverstats` — 设置服务器统计频道\n`/partnership` — 设置合作审核与发布面板\n`/announce` — 让 Bot 代发文字或 Embed 公告\n`/sticky` — 设置或取消置底消息\n`/giveaway` — 打开私密抽奖面板\n`/guessnumber` — 打开猜数字管理面板\n`/autoreaction` — 设置当前频道自动表情\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员\n全局黑名单指令只允许机器人拥有者使用；`/ban` 也支持直接填写不在服务器的用户 ID。', ephemeral: true });
+      await interaction.reply({ content: guildText(interaction.guild, '**可用指令**\n`/language` — 切换本服务器语言\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看消息统计\n`/welcome` — 设置欢迎离开\n`/roles` — 设置身份组面板\n`/moderation` — 设置惩罚日志\n`/serverstats` — 设置服务器统计\n`/partnership` — 设置服务器合作\n`/giveaway` — 设置抽奖\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员'), ephemeral: true });
+    } else if (interaction.commandName === 'language') {
+      if (!(await canManage(interaction))) { await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以更改语言。', ephemeral: true }); return; }
+      const selectedLanguage = interaction.options.getString('language', true);
+      const config = getGuildSettings(interaction.guild.id);
+      config.language = selectedLanguage;
+      saveSettings();
+      await interaction.reply({ content: selectedLanguage === 'zh-TW' ? '已切換本伺服器語言為繁體中文。新的面板、記錄與系統訊息會使用繁體中文。' : '已切换本服务器语言为简体中文。', ephemeral: true });
     } else if (interaction.commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
     } else if (interaction.commandName === 'message') {
