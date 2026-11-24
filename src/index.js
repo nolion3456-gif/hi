@@ -497,13 +497,22 @@ function panelComponents(config) {
 
 function rolePanelEmbed(guild, roleConfig) {
   const roleLines = roleConfig.roles.length
-    ? roleConfig.roles.map((item) => `• <@&${item.roleId}> — ${item.label}`).join('\n')
+    ? roleConfig.roles.map((item) => `• ${guild.roles.cache.has(item.roleId) ? `<@&${item.roleId}>` : `已删除身份组（ID：${item.roleId}）`} — ${item.label}`).join('\n')
     : '目前还没有设置身份组。';
   return new EmbedBuilder()
     .setColor(0xfee75c)
     .setTitle(roleConfig.title)
     .setDescription(`${roleConfig.description}\n\n${roleLines}`)
     .setFooter({ text: `${guild.name} · ${roleConfig.mode === 'select' ? '使用下拉选单领取或取消身份组' : '点击按钮领取或取消身份组'}` });
+}
+
+async function pruneDeletedRolePanelEntries(guild, roleConfig = getGuildSettings(guild.id).rolePanel) {
+  const roles = await guild.roles.fetch().catch(() => guild.roles.cache);
+  const before = roleConfig.roles.length;
+  roleConfig.roles = roleConfig.roles.filter((item) => item?.roleId && roles.has(item.roleId));
+  const removed = before - roleConfig.roles.length;
+  if (removed > 0) saveSettings();
+  return removed;
 }
 
 function rolePanelButtons(roleConfig) {
@@ -2253,6 +2262,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       const config = getGuildSettings(interaction.guild.id).rolePanel;
+      await pruneDeletedRolePanelEntries(interaction.guild, config);
       await interaction.reply({ embeds: [rolePanelEmbed(interaction.guild, config)], components: roleConfigComponents(config), ephemeral: true });
     } else if (interaction.commandName === 'moderation') {
       if (!(await canManage(interaction))) {
@@ -2398,6 +2408,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const roleId = interaction.customId.split(':')[1];
     const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
     if (!role || role.managed) {
+      const roleConfig = getGuildSettings(interaction.guild.id).rolePanel;
+      await pruneDeletedRolePanelEntries(interaction.guild, roleConfig);
+      if (interaction.message?.editable) {
+        await interaction.message.edit({ embeds: [rolePanelEmbed(interaction.guild, roleConfig)], components: rolePanelPublicComponents(roleConfig) }).catch(() => {});
+      }
       await interaction.reply({ content: '这个身份组不存在或无法由机器人管理。', ephemeral: true });
       return;
     }
@@ -3021,6 +3036,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setMaxValues(1);
       await interaction.reply({ content: '请选择身份组，下一步再输入按钮文字：', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
     } else if (interaction.customId === 'role_remove') {
+      await pruneDeletedRolePanelEntries(interaction.guild, config.rolePanel);
       const menu = new RoleSelectMenuBuilder()
         .setCustomId('role_remove_select')
         .setPlaceholder('选择要从面板移除的身份组')
@@ -3028,12 +3044,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setMaxValues(25);
       await interaction.reply({ content: '请选择要移除的身份组，可多选；不会删除服务器身份组。', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
     } else if (interaction.customId === 'role_mode') {
+      await pruneDeletedRolePanelEntries(interaction.guild, config.rolePanel);
       config.rolePanel.mode = config.rolePanel.mode === 'select' ? 'buttons' : 'select';
       saveSettings();
       await interaction.update({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: roleConfigComponents(config.rolePanel) });
     } else if (interaction.customId === 'role_refresh') {
+      await pruneDeletedRolePanelEntries(interaction.guild, config.rolePanel);
       await interaction.update({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: roleConfigComponents(config.rolePanel) });
     } else if (interaction.customId === 'role_publish') {
+      await pruneDeletedRolePanelEntries(interaction.guild, config.rolePanel);
       const message = await interaction.channel.send({ embeds: [rolePanelEmbed(interaction.guild, config.rolePanel)], components: rolePanelPublicComponents(config.rolePanel) });
       await interaction.reply({ content: `身份组面板已发布：[点击查看](https://discord.com/channels/${interaction.guild.id}/${message.channel.id}/${message.id})`, ephemeral: true });
     } else if (interaction.customId === 'welcome_channel' || interaction.customId === 'leave_channel') {
@@ -3234,6 +3253,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
     if (!member) { await interaction.reply({ content: '找不到你的服务器成员资料。', ephemeral: true }); return; }
     const roleConfig = getGuildSettings(interaction.guild.id).rolePanel;
+    await pruneDeletedRolePanelEntries(interaction.guild, roleConfig);
     const configuredRoles = new Map(roleConfig.roles.map((item) => [item.roleId, item]));
     const results = [];
     for (const roleId of interaction.values) {
