@@ -1889,12 +1889,15 @@ async function createGuildSetupChannel(guild) {
 
   config.setupChannelId = channel.id;
   saveSettings();
+  const botOwner = ownerId ? await client.users.fetch(ownerId).catch(() => null) : null;
+  const botOwnerText = botOwner ? `<@${botOwner.id}>（${botOwner.tag}）` : '尚未配置机器人拥有者';
   const guide = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(guildText(guild, '🤖 机器人自我介绍与设置指南'))
     .setDescription(guildText(guild, `你好！我是一个中文 Discord 多功能机器人，提供欢迎离开、身份组、惩罚记录、服务器统计、抽奖、服务器合作、赞助抽奖、置底消息、猜数字和自动反应等功能。\n\n本频道仅限服务器拥有者和拥有 Administrator（管理员）权限的成员查看。`))
     .addFields(
       { name: guildText(guild, '开始设置'), value: guildText(guild, '先执行 `/language` 选择本服务器语言，再使用 `/help` 查看全部指令。') },
+      { name: guildText(guild, '机器人拥有者'), value: guildText(guild, botOwnerText) },
       { name: guildText(guild, '常用功能'), value: guildText(guild, '`/welcome` 欢迎离开\n`/roles` 身份组面板\n`/moderation` 惩罚日志\n`/serverstats` 服务器统计\n`/giveaway` 抽奖管理\n`/partnership` 服务器合作') },
       { name: guildText(guild, '权限提醒'), value: guildText(guild, '管理功能需要使用者拥有“管理服务器”权限；Bot 需要按照功能拥有发送消息、管理频道、管理身份组、管理消息和禁言成员等权限。') },
       { name: guildText(guild, '遇到问题'), value: guildText(guild, '如果 Slash 指令没有出现，请先重启 Bot 并等待 Discord 全局指令同步；如果频道没有创建，请检查 Bot 是否拥有管理频道权限。') },
@@ -1908,7 +1911,10 @@ async function createGuildSetupChannel(guild) {
       .setColor(0x57f287)
       .setTitle(guildText(guild, '🤖 Bot 已加入你的服务器'))
       .setDescription(guildText(guild, `我已经在 **${guild.name}** 创建了专属设置指南频道：<#${channel.id}>\n\n该频道只有服务器拥有者和拥有 Administrator（管理员）权限的成员可以查看。请进入频道阅读自我介绍、权限需求和常用指令设置说明。`))
-      .addFields({ name: guildText(guild, '建议先执行'), value: guildText(guild, '`/language` 选择语言，然后使用 `/help` 查看全部功能。') })
+      .addFields(
+        { name: guildText(guild, '机器人拥有者'), value: guildText(guild, botOwnerText), inline: true },
+        { name: guildText(guild, '建议先执行'), value: guildText(guild, '`/language` 选择语言，然后使用 `/help` 查看全部功能。'), inline: true },
+      )
       .setTimestamp();
     await owner.send({ embeds: [ownerNotice] }).catch((error) => console.warn(`Could not DM owner of ${guild.name}:`, error.message));
   }
