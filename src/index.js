@@ -1662,6 +1662,39 @@ async function completePartnerAction(interaction, app, action) {
   return result;
 }
 
+const commandLocalizations = {
+  ping: ['检查延迟', '檢查延遲', 'ping'],
+  help: ['帮助', '幫助', 'help'],
+  about: ['关于', '關於', 'about'],
+  blacklist: ['全局黑名单', '全域黑名單', 'blacklist'],
+  message: ['消息统计', '訊息統計', 'message'],
+  welcome: ['欢迎', '歡迎', 'welcome'],
+  roles: ['身份组', '身分組', 'roles'],
+  moderation: ['惩罚设置', '處罰設定', 'moderation'],
+  serverstats: ['服务器统计', '伺服器統計', 'serverstats'],
+  partnership: ['服务器合作', '伺服器合作', 'partnership'],
+  announce: ['公告代发', '公告代發', 'announce'],
+  sticky: ['置底', '置底', 'sticky'],
+  giveaway: ['抽奖', '抽獎', 'giveaway'],
+  guessnumber: ['猜数字', '猜數字', 'guessnumber'],
+  autoreaction: ['自动表情', '自動表情', 'autoreaction'],
+  mute: ['禁言', '禁言', 'mute'],
+  unmute: ['解除禁言', '解除禁言', 'unmute'],
+  kick: ['踢出', '踢出', 'kick'],
+  ban: ['封禁', '封禁', 'ban'],
+  unban: ['解除封禁', '解除封禁', 'unban'],
+  language: ['语言', '語言', 'language'],
+};
+
+function localizeCommand(command) {
+  const names = commandLocalizations[command.name];
+  return names ? command.setNameLocalizations({ 'zh-CN': names[0], 'zh-TW': names[1], 'en-US': names[2] }) : command;
+}
+
+function canonicalCommandName(name) {
+  return Object.entries(commandLocalizations).find(([, names]) => name === names[0] || name === names[1] || name === names[2])?.[0] || name;
+}
+
 const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('检查机器人是否在线。'),
   new SlashCommandBuilder().setName('help').setDescription('查看可用指令。'),
@@ -1722,7 +1755,7 @@ const commands = [
     .setName('unban').setDescription('解除一名用户的封禁。')
     .addStringOption((option) => option.setName('user_id').setDescription('被封禁用户的 Discord ID。').setRequired(true))
     .addStringOption((option) => option.setName('reason').setDescription('解除原因，可不填。').setRequired(false)),
-].map((command) => command.toJSON());
+].map((command) => localizeCommand(command).toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
@@ -2256,7 +2289,8 @@ process.on('SIGINT', () => shutdown('SIGINT').catch((error) => { console.error('
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    if (interaction.isChatInputCommand() && interaction.commandName === 'blacklist') {
+    const commandName = interaction.isChatInputCommand() ? canonicalCommandName(interaction.commandName) : '';
+    if (interaction.isChatInputCommand() && commandName === 'blacklist') {
       if (!isBotOwner(interaction.user.id)) {
         await interaction.reply({ content: '这个指令只有机器人拥有者可以使用。', ephemeral: true });
         return;
@@ -2287,7 +2321,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ content: `已将 **${user.tag}** 加入全局黑名单。机器人会在其进入服务器时自动封禁；如果没有封禁权限，则禁止其使用机器人。`, ephemeral: true });
       return;
     }
-    if (isGlobalBlacklisted(interaction.user?.id) && !(interaction.isChatInputCommand() && interaction.commandName === 'blacklist' && isBotOwner(interaction.user.id))) {
+    if (isGlobalBlacklisted(interaction.user?.id) && !(interaction.isChatInputCommand() && commandName === 'blacklist' && isBotOwner(interaction.user.id))) {
       await interaction.reply({ content: '你无法使用此机器人。', ephemeral: true }).catch(() => {});
       return;
     }
@@ -2297,30 +2331,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
   if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'ping') {
+    if (commandName === 'ping') {
       await interaction.reply(`Pong！当前延迟：${client.ws.ping}ms`);
-    } else if (interaction.commandName === 'help') {
+    } else if (commandName === 'help') {
       await interaction.reply({ content: guildText(interaction.guild, '**可用指令**\n`/language` — 切换本服务器语言\n`/ping` — 检查机器人延迟\n`/help` — 查看帮助\n`/about` — 查看机器人信息\n`/message` — 查看消息统计\n`/welcome` — 设置欢迎离开\n`/roles` — 设置身份组面板\n`/moderation` — 设置惩罚日志\n`/serverstats` — 设置服务器统计\n`/partnership` — 设置服务器合作\n`/giveaway` — 设置抽奖\n`/mute` `/unmute` `/kick` `/ban` `/unban` — 管理成员'), ephemeral: true });
-    } else if (interaction.commandName === 'language') {
+    } else if (commandName === 'language') {
       if (!(await canManage(interaction))) { await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以更改语言。', ephemeral: true }); return; }
       const selectedLanguage = interaction.options.getString('language', true);
       const config = getGuildSettings(interaction.guild.id);
       config.language = selectedLanguage;
       saveSettings();
       await interaction.reply({ content: selectedLanguage === 'zh-TW' ? '已切換本伺服器語言為繁體中文。新的面板、記錄與系統訊息會使用繁體中文。' : '已切换本服务器语言为简体中文。', ephemeral: true });
-    } else if (interaction.commandName === 'about') {
+    } else if (commandName === 'about') {
       await interaction.reply('这是一个使用 discord.js 构建的中文 Discord 机器人。');
-    } else if (interaction.commandName === 'message') {
+    } else if (commandName === 'message') {
       const summary = getMessageSummary(interaction.guild.id, interaction.user.id);
       await interaction.reply({ content: `**${interaction.user.username} 的消息统计**\n\n今天：**${summary.today}** 条\n本周：**${summary.week}** 条\n本月：**${summary.month}** 条\n总数：**${summary.total}** 条\n\n统计时区：Asia/Shanghai`, ephemeral: true });
-    } else if (interaction.commandName === 'welcome') {
+    } else if (commandName === 'welcome') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。', ephemeral: true });
         return;
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [panelEmbed(interaction.guild, config)], components: panelComponents(config), ephemeral: true });
-    } else if (interaction.commandName === 'roles') {
+    } else if (commandName === 'roles') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。', ephemeral: true });
         return;
@@ -2328,34 +2362,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const config = getGuildSettings(interaction.guild.id).rolePanel;
       await pruneDeletedRolePanelEntries(interaction.guild, config);
       await interaction.reply({ embeds: [rolePanelEmbed(interaction.guild, config)], components: roleConfigComponents(config), ephemeral: true });
-    } else if (interaction.commandName === 'moderation') {
+    } else if (commandName === 'moderation') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。', ephemeral: true });
         return;
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [moderationPanelEmbed(interaction.guild, config)], components: moderationPanelComponents(), ephemeral: true });
-    } else if (interaction.commandName === 'serverstats') {
+    } else if (commandName === 'serverstats') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置服务器统计。', ephemeral: true });
         return;
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [serverStatsEmbed(interaction.guild, config)], components: serverStatsComponents(config.serverStats), ephemeral: true });
-    } else if (interaction.commandName === 'partnership') {
+    } else if (commandName === 'partnership') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置合作系统。', ephemeral: true });
         return;
       }
       const config = getGuildSettings(interaction.guild.id);
       await interaction.reply({ embeds: [partnerAdminEmbed(interaction.guild, config)], components: partnerAdminComponents(), ephemeral: true });
-    } else if (interaction.commandName === 'announce') {
+    } else if (commandName === 'announce') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以使用公告代发功能。', ephemeral: true });
         return;
       }
       await interaction.reply({ content: '请选择要发送的公告类型。公开消息不会显示你的身份。', components: announceComponents(), ephemeral: true });
-    } else if (interaction.commandName === 'sticky') {
+    } else if (commandName === 'sticky') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以使用置底功能。', ephemeral: true });
         return;
@@ -2372,7 +2406,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await cancelSticky(interaction.guild, interaction.channel, allChannels ? 'all' : 'current');
         await interaction.reply({ content: `已取消${allChannels ? '所有文字频道' : '当前频道'}的置底消息。`, ephemeral: true });
       }
-    } else if (interaction.commandName === 'giveaway') {
+    } else if (commandName === 'giveaway') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以创建和管理抽奖。', ephemeral: true });
         return;
@@ -2381,14 +2415,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await refreshGuildGiveawayMessages(interaction.guild);
       const active = Object.values(settings.giveaways);
       await interaction.editReply({ embeds: [giveawayPanelEmbed(interaction.guild, active)], components: giveawayPanelButtons(active, interaction.guild.id) });
-    } else if (interaction.commandName === 'guessnumber') {
+    } else if (commandName === 'guessnumber') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置猜数字。', ephemeral: true });
         return;
       }
       const game = settings.guessNumberGames[interaction.guild.id];
       await interaction.reply({ embeds: [guessNumberAdminEmbed(interaction.guild, game)], components: guessNumberAdminComponents(game), ephemeral: true });
-    } else if (interaction.commandName === 'autoreaction') {
+    } else if (commandName === 'autoreaction') {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限的管理员可以设置频道自动表情。', ephemeral: true });
         return;
@@ -2412,12 +2446,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         saveSettings();
         await interaction.reply({ content: '已取消当前频道的自动表情。', ephemeral: true });
       }
-    } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(interaction.commandName)) {
+    } else if (['mute', 'unmute', 'kick', 'ban', 'unban'].includes(commandName)) {
       if (!(await canManage(interaction))) {
         await interaction.reply({ content: '只有拥有“管理服务器”权限，且服务器有机器人拥有者或在允许服务器列表中的成员可以使用。' });
         return;
       }
-      await performModeration(interaction, interaction.commandName);
+      await performModeration(interaction, commandName);
     }
     return;
   }
