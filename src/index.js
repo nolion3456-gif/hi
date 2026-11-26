@@ -1902,6 +1902,16 @@ async function createGuildSetupChannel(guild) {
     .setFooter({ text: guildText(guild, `${guild.name} · 机器人设置指南`) })
     .setTimestamp();
   await channel.send({ embeds: [guide] }).catch((error) => console.error('Could not send setup guide:', error.message));
+  const owner = await client.users.fetch(guild.ownerId).catch(() => null);
+  if (owner) {
+    const ownerNotice = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle(guildText(guild, '🤖 Bot 已加入你的服务器'))
+      .setDescription(guildText(guild, `我已经在 **${guild.name}** 创建了专属设置指南频道：<#${channel.id}>\n\n该频道只有服务器拥有者和拥有 Administrator（管理员）权限的成员可以查看。请进入频道阅读自我介绍、权限需求和常用指令设置说明。`))
+      .addFields({ name: guildText(guild, '建议先执行'), value: guildText(guild, '`/language` 选择语言，然后使用 `/help` 查看全部功能。') })
+      .setTimestamp();
+    await owner.send({ embeds: [ownerNotice] }).catch((error) => console.warn(`Could not DM owner of ${guild.name}:`, error.message));
+  }
   return channel;
 }
 
