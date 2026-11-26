@@ -285,6 +285,7 @@ function getGuildSettings(guildId) {
   if (!settings[guildId]) {
     settings[guildId] = {
       language: 'zh-CN',
+      setupChannelId: '',
       welcomeChannelId: '',
       leaveChannelId: '',
       welcomeMessage: '欢迎 {user} 加入 **{server}**！',
@@ -331,6 +332,7 @@ function getGuildSettings(guildId) {
     };
   }
   if (!['zh-CN', 'zh-TW'].includes(settings[guildId].language)) settings[guildId].language = 'zh-CN';
+  if (!Object.prototype.hasOwnProperty.call(settings[guildId], 'setupChannelId')) settings[guildId].setupChannelId = '';
   if (!settings[guildId].rolePanel) {
     settings[guildId].rolePanel = {
       title: '身份组领取面板',
@@ -1858,7 +1860,53 @@ client.once(Events.ClientReady, async (readyClient) => {
   periodicStatsRefresh.unref?.();
 });
 
+async function createGuildSetupChannel(guild) {
+  const config = getGuildSettings(guild.id);
+  const setupChannelName = '🤖・机器人设置・指南';
+  const existing = config.setupChannelId
+    ? await guild.channels.fetch(config.setupChannelId).catch(() => null)
+    : guild.channels.cache.find((channel) => channel.name === setupChannelName && channel.type === ChannelType.GuildText);
+  if (existing?.isTextBased?.()) {
+    if (config.setupChannelId !== existing.id) { config.setupChannelId = existing.id; saveSettings(); }
+    return existing;
+  }
+
+  const channel = await guild.channels.create({
+    name: setupChannelName,
+    type: ChannelType.GuildText,
+    topic: '机器人自我介绍与设置指引｜仅服务器拥有者和管理员可见',
+    permissionOverwrites: [
+      { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+      { id: guild.ownerId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.EmbedLinks] },
+    ],
+    reason: '新服务器加入时创建机器人设置指南频道',
+  }).catch((error) => {
+    console.error(`Could not create setup channel in ${guild.name}:`, error.message);
+    return null;
+  });
+  if (!channel) return null;
+
+  config.setupChannelId = channel.id;
+  saveSettings();
+  const guide = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(guildText(guild, '🤖 机器人自我介绍与设置指南'))
+    .setDescription(guildText(guild, `你好！我是一个中文 Discord 多功能机器人，提供欢迎离开、身份组、惩罚记录、服务器统计、抽奖、服务器合作、赞助抽奖、置底消息、猜数字和自动反应等功能。\n\n本频道仅限服务器拥有者和拥有 Administrator（管理员）权限的成员查看。`))
+    .addFields(
+      { name: guildText(guild, '开始设置'), value: guildText(guild, '先执行 `/language` 选择本服务器语言，再使用 `/help` 查看全部指令。') },
+      { name: guildText(guild, '常用功能'), value: guildText(guild, '`/welcome` 欢迎离开\n`/roles` 身份组面板\n`/moderation` 惩罚日志\n`/serverstats` 服务器统计\n`/giveaway` 抽奖管理\n`/partnership` 服务器合作') },
+      { name: guildText(guild, '权限提醒'), value: guildText(guild, '管理功能需要使用者拥有“管理服务器”权限；Bot 需要按照功能拥有发送消息、管理频道、管理身份组、管理消息和禁言成员等权限。') },
+      { name: guildText(guild, '遇到问题'), value: guildText(guild, '如果 Slash 指令没有出现，请先重启 Bot 并等待 Discord 全局指令同步；如果频道没有创建，请检查 Bot 是否拥有管理频道权限。') },
+    )
+    .setFooter({ text: guildText(guild, `${guild.name} · 机器人设置指南`) })
+    .setTimestamp();
+  await channel.send({ embeds: [guide] }).catch((error) => console.error('Could not send setup guide:', error.message));
+  return channel;
+}
+
 client.on(Events.GuildCreate, async (guild) => {
+  await createGuildSetupChannel(guild);
   for (const [userId, entry] of Object.entries(settings.globalBlacklist)) {
     await enforceGlobalBlacklistInGuild(guild, userId, entry).catch((error) => console.error('Could not enforce global blacklist:', error));
   }
